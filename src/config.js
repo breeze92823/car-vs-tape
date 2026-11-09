@@ -408,7 +408,7 @@ export const TRACK = {
 
 // Economy (game.js).
 export const ECONOMY = {
-  basePower: 2, // power per second at full speed with every multiplier at 1
+  basePower: 1, // power per second at full speed with every multiplier at 1
   speedRef: 18, // m/s that counts as "full speed" for training
   xpPerSecond: 6,
   xpPerTape: 25, // x (tape index + 1)
