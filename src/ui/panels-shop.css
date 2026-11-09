@@ -1,0 +1,105 @@
+/* Car Shop window (panels.js): a sideways-scrolling row of car cards. */
+.cs-window {
+  --W: 1255;
+  --H: 604;
+  --Wp: 760;
+  --Hp: 604;
+  --pb: 0;
+}
+.cs-body {
+  overflow: hidden;
+  touch-action: pan-x;
+}
+.cs-strip {
+  display: flex;
+  gap: calc(22 * var(--wu));
+  height: 100%;
+  padding: calc(14 * var(--wu)) calc(26 * var(--wu)) 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior: contain;
+  touch-action: pan-x;
+  scrollbar-width: auto;
+  scrollbar-color: rgba(235, 235, 240, 0.85) rgba(0, 0, 0, 0.15);
+}
+.cs-strip::-webkit-scrollbar {
+  height: calc(10 * var(--wu));
+}
+.cs-strip::-webkit-scrollbar-thumb {
+  background: rgba(235, 235, 240, 0.85);
+  border-radius: 99px;
+}
+.cs-card {
+  position: relative;
+  flex: none;
+  width: calc(426 * var(--wu));
+  height: calc(546 * var(--wu));
+  background: rgba(8, 8, 10, 0.34);
+  border: max(1px, calc(2 * var(--wu))) solid rgba(255, 255, 255, 0.05);
+}
+.cs-card.sel {
+  background: rgba(42, 255, 255, 0.14);
+  border-color: #2affff;
+}
+.cs-name {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(12 * var(--wu));
+  text-align: center;
+  font-size: calc(var(--fs, 44) * var(--wu));
+  --ow: 3.2;
+}
+.cs-mult {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(66 * var(--wu));
+  text-align: center;
+  font-size: calc(32 * var(--wu));
+  color: #7dff5a;
+  --ow: 2.6;
+}
+.cs-pic {
+  position: absolute;
+  left: calc(23 * var(--wu));
+  right: calc(23 * var(--wu));
+  top: calc(116 * var(--wu));
+  height: calc(238 * var(--wu));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(circle at 50% 70%, #3b5fb8, #10173a);
+  border: max(1px, calc(3 * var(--wu))) solid rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+}
+.cs-pic img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.cs-speed {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(366 * var(--wu));
+  text-align: center;
+  font-size: calc(32 * var(--wu));
+  font-weight: 600;
+  color: #cfcfd2;
+  --oc: rgba(30, 30, 34, 0.9);
+  --ow: 1.8;
+  text-shadow: none;
+}
+.cs-card .cs-buy {
+  position: absolute;
+  left: calc(6 * var(--wu));
+  right: calc(6 * var(--wu));
+  top: calc(440 * var(--wu));
+  height: calc(86 * var(--wu));
+  min-height: 40px;
+}
+.cs-buy-text {
+  font-size: calc(40 * var(--wu));
+  --ow: 3;
+}

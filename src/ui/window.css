@@ -1,0 +1,293 @@
+/* Lego window shell (window.js). Lengths are reference-screenshot pixels (1920 x 992)
+   times --wu. A window sets its design size on its overlay class:
+     --W / --H    header width / body height (landscape)
+     --Wp / --Hp  the same in portrait (phones), where the window is narrower and taller
+     --X          design px under the body (e.g. the Railcars restock bar)
+   --wu follows the screen like a Roblox ScreenGui, never below 0.5px on small screens,
+   and always fits the window on screen. --top (px) keeps it under Boxity's toolbar. */
+:where(.gw-overlay) {
+  --W: 1096;
+  --H: 602;
+  --Wp: 760;
+  --Hp: 900;
+  --X: 0;
+}
+.gw-overlay {
+  --Wd: var(--W);
+  --Hd: var(--H);
+  --top: 0px;
+  --ink: #141016;
+  --studs: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='9.5' y='10.6' width='13' height='13' rx='2.6' fill='none' stroke='%23000' stroke-opacity='.2' stroke-width='2.4'/%3E%3Crect x='9.5' y='9' width='13' height='13' rx='2.6' fill='none' stroke='%23fff' stroke-opacity='.36' stroke-width='2.4'/%3E%3C/svg%3E");
+  --wu: min(
+    max(min(calc(100vw / 1920), calc(100vh / 992)), 0.5px),
+    calc((100vw - 12px) / (var(--Wd) + 8)),
+    calc((100vh - 16px - var(--top)) / (var(--Hd) + 124 + var(--X) + var(--pb, 56)))
+  );
+  position: fixed;
+  inset: 0;
+  z-index: 40; /* over the HUD (20) */
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding-top: var(--top);
+  padding-bottom: calc(var(--pb, 56) * var(--wu)); /* the reference sits a little above centre */
+  box-sizing: border-box;
+  pointer-events: none; /* the world and the HUD stay usable around the window */
+  font-family: 'Fredoka', system-ui, sans-serif;
+  font-weight: 700;
+  line-height: 1;
+  color: #fff;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+@supports (height: 100dvh) {
+  .gw-overlay {
+    --wu: min(
+      max(min(calc(100vw / 1920), calc(100dvh / 992)), 0.5px),
+      calc((100vw - 12px - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px)) / (var(--Wd) + 8)),
+      calc((100dvh - 16px - var(--top) - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)) / (var(--Hd) + 124 + var(--X) + var(--pb, 56)))
+    );
+  }
+}
+.gw-overlay.portrait {
+  --Wd: var(--Wp);
+  --Hd: var(--Hp);
+}
+.gw-overlay[hidden] {
+  display: none;
+}
+.gw-overlay *,
+.gw-overlay *::before,
+.gw-overlay *::after {
+  box-sizing: border-box;
+}
+.gw-overlay svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+/* Like the reference, the top buttons and the power / level bar make way for a window. */
+body.gw-open .hud-top,
+body.gw-open .hud-bottom {
+  visibility: hidden;
+}
+
+/* The scene behind an open window is blurred (desktop; phones darken it instead). */
+body > canvas {
+  transition: filter 0.15s;
+}
+@media (pointer: fine) {
+  body.gw-open > canvas {
+    filter: blur(8px);
+  }
+}
+@media (pointer: coarse) {
+  body.gw-open > canvas {
+    filter: brightness(0.8);
+  }
+}
+
+/* Outlined text (stroke under the fill + a hard shadow). --ow = outline in design px. */
+.gw-ol {
+  -webkit-text-stroke: max(1.5px, calc(var(--ow, 3) * 2 * var(--wu))) var(--oc, var(--ink));
+  paint-order: stroke fill;
+  text-shadow: 0 calc(2.5 * var(--wu)) 0 var(--oc, var(--ink));
+  white-space: nowrap;
+}
+
+/* Lego plate: colour + studs + bevel + dark outline. --sp = stud pitch in design px. */
+.gw-lego {
+  --c: #888;
+  background-color: var(--c);
+  background-image: var(--studs);
+  background-size: calc(var(--sp, 31) * var(--wu)) calc(var(--sp, 31) * var(--wu));
+  background-position: calc(var(--sp, 31) * -0.18 * var(--wu)) calc(var(--sp, 31) * -0.12 * var(--wu));
+  border: max(2px, calc(4 * var(--wu))) solid var(--ink);
+  box-shadow:
+    inset 0 0 0 calc(4 * var(--wu)) rgba(255, 255, 255, 0.2),
+    inset 0 calc(-7 * var(--wu)) 0 rgba(0, 0, 0, 0.16);
+}
+
+/* --- Frame ------------------------------------------------------------------------- */
+.gw-dialog {
+  position: relative;
+  width: calc(var(--Wd) * var(--wu));
+  pointer-events: auto;
+  touch-action: manipulation;
+}
+.gw-head {
+  --c: var(--hc);
+  position: relative;
+  z-index: 1;
+  height: calc(114 * var(--wu));
+  display: flex;
+  align-items: center;
+  padding-left: calc(30 * var(--wu));
+  border-width: max(3px, calc(6 * var(--wu)));
+  border-radius: calc(3 * var(--wu));
+  box-shadow:
+    inset 0 0 0 calc(6 * var(--wu)) rgba(255, 255, 255, 0.22),
+    inset 0 calc(-10 * var(--wu)) 0 rgba(0, 0, 0, 0.14);
+}
+.gw-icon {
+  width: calc(80 * var(--wu));
+  height: calc(80 * var(--wu));
+  flex: none;
+  filter: drop-shadow(0 calc(3 * var(--wu)) 0 rgba(0, 0, 0, 0.35));
+}
+.gw-title {
+  margin-left: calc(14 * var(--wu));
+  font-size: calc(54 * var(--wu));
+  --ow: 3.2;
+}
+.gw-close {
+  position: absolute;
+  right: calc(24 * var(--wu));
+  top: calc(10 * var(--wu));
+  width: max(40px, calc(74 * var(--wu)));
+  height: max(40px, calc(74 * var(--wu)));
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--xc);
+  border: max(2px, calc(4 * var(--wu))) solid var(--ink);
+  border-radius: calc(3 * var(--wu));
+  box-shadow:
+    inset 0 0 0 calc(4 * var(--wu)) rgba(255, 255, 255, 0.18),
+    inset 0 calc(-6 * var(--wu)) 0 rgba(0, 0, 0, 0.18);
+  font: inherit;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.gw-close:active {
+  transform: scale(0.92);
+}
+.gw-x {
+  font-size: max(24px, calc(58 * var(--wu)));
+  color: #fff;
+  --ow: 3;
+}
+.gw-body {
+  scrollbar-width: none;
+  position: relative;
+  height: calc(var(--Hd) * var(--wu));
+  margin: 0 calc(20 * var(--wu));
+  border: max(2px, calc(4 * var(--wu))) solid #0c0c0e;
+  border-top: 0;
+  background: rgba(10, 10, 12, 0.3);
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+}
+
+/* Rows of the list windows (Titles, Settings): dark plates with a dark rim. */
+.gw-row {
+  position: relative;
+  margin: 0 calc(20 * var(--wu));
+  border: max(2px, calc(5 * var(--wu))) solid rgba(16, 16, 18, 0.85);
+  border-radius: calc(6 * var(--wu));
+  background: rgba(6, 6, 8, 0.5);
+}
+
+/* Buttons. */
+.gw-btn {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  padding: 0;
+  font: inherit;
+  color: #fff;
+  cursor: pointer;
+  touch-action: manipulation;
+  --sp: 22;
+}
+.gw-btn:active {
+  transform: translateY(calc(2 * var(--wu))) scale(0.97);
+}
+.gw-btn:focus-visible {
+  outline: 3px solid #fff36a;
+  outline-offset: 2px;
+}
+.gw-btn.disabled {
+  filter: grayscale(0.55) brightness(0.85);
+}
+.gw-yellow { --c: #ffe01c; }
+.gw-green { --c: #33dd33; }
+.gw-blue { --c: #3ba4ff; }
+.gw-purple { --c: #d62cf2; }
+.gw-red { --c: #ff3236; }
+.gw-white { --c: #d9d9dc; }
+
+/* Gem price: hexagon coin + number. */
+.gw-gem {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(6 * var(--wu));
+}
+.gw-gem-icon {
+  display: inline-block;
+  width: 1.05em;
+  height: 1.05em;
+}
+
+/* Messages over the bottom of the window. */
+.gw-toast {
+  position: absolute;
+  left: 50%;
+  bottom: calc(14 * var(--wu));
+  transform: translateX(-50%);
+  font-size: max(15px, calc(38 * var(--wu)));
+  opacity: 0;
+  pointer-events: none;
+  --ow: 3;
+}
+.gw-toast.show {
+  animation: gw-toast 1.7s ease-out forwards;
+}
+@keyframes gw-toast {
+  0% { opacity: 0; transform: translate(-50%, 10px) scale(0.8); }
+  10% { opacity: 1; transform: translate(-50%, 0) scale(1.05); }
+  18% { transform: translate(-50%, 0) scale(1); }
+  80% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+/* One-shot feedback. */
+.gw-pop {
+  animation: gw-pop 0.24s cubic-bezier(0.3, 1.6, 0.5, 1);
+}
+@keyframes gw-pop {
+  from { transform: scale(0.7); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+.gw-shake {
+  animation: gw-shake 0.36s;
+}
+@keyframes gw-shake {
+  0%, 100% { translate: 0; }
+  20% { translate: calc(-12 * var(--wu)) 0; }
+  40% { translate: calc(10 * var(--wu)) 0; }
+  60% { translate: calc(-7 * var(--wu)) 0; }
+  80% { translate: calc(4 * var(--wu)) 0; }
+}
+.gw-bump {
+  animation: gw-bump 0.35s cubic-bezier(0.3, 1.8, 0.5, 1);
+}
+@keyframes gw-bump {
+  40% { scale: 1.12; }
+}
+.gw-overlay [hidden] {
+  display: none !important;
+}
+
+.gw-body::-webkit-scrollbar {
+  width: 0;
+}

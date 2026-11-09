@@ -1,0 +1,72 @@
+name: Deploy to Bloxity
+
+# Builds the frontend and uploads it to Bloxity Hosting (https://hosting.bloxity.io/docs).
+# main -> prod channel (https://<gameId>.play.bloxity.io), dev -> dev channel.
+# Needs LEGION_GAME_ID (variable or secret) and LEGION_DEPLOY_TOKEN (secret).
+on:
+  push:
+    branches: [main, dev]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-${{ github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - name: Determine deploy channel
+        id: channel
+        run: |
+          if [ "${{ github.ref_name }}" = "main" ]; then
+            echo "channel=prod" >> "$GITHUB_OUTPUT"
+          else
+            echo "channel=dev" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Validate deploy config
+        run: |
+          if [ -z "${GAME_ID}" ]; then
+            echo "::error::LEGION_GAME_ID is not set (Settings > Secrets and variables > Actions)."
+            exit 1
+          fi
+          if [ -z "${DEPLOY_TOKEN}" ]; then
+            echo "::error::LEGION_DEPLOY_TOKEN is not set (Settings > Secrets and variables > Actions > Secrets)."
+            exit 1
+          fi
+        env:
+          GAME_ID: ${{ vars.LEGION_GAME_ID || secrets.LEGION_GAME_ID }}
+          DEPLOY_TOKEN: ${{ secrets.LEGION_DEPLOY_TOKEN }}
+
+      - name: Build
+        # VITE_DEV_MODE is deliberately unset so deployed builds use the real Bloxity SDK/CDN.
+        # No server URL: built games always reach Car-vs-tape-backend through the
+        # Bloxity matchmaker (Legion.SDK.net.resolveEndpoint in src/bloxity.js).
+        run: |
+          if [ "${{ steps.channel.outputs.channel }}" = "prod" ]; then
+            npm run build
+          else
+            npm run build:dev
+          fi
+
+      - name: Zip build
+        run: cd dist && zip -r ../build.zip . && cd ..
+
+      - name: Upload to Bloxity
+        run: |
+          curl -sS -f -X POST \
+            "https://api.bloxity.io/v1/hosting/games/${{ vars.LEGION_GAME_ID || secrets.LEGION_GAME_ID }}/frontend?channel=${{ steps.channel.outputs.channel }}&version=${{ github.sha }}" \
+            -H "Authorization: Bearer ${{ secrets.LEGION_DEPLOY_TOKEN }}" \
+            -H "Content-Type: application/zip" \
+            --data-binary @build.zip \
+            -w "\nHTTP status: %{http_code}\n"
