@@ -2,7 +2,7 @@
 // boost, the Free Boost chest, and the best tape reached. Saved on the game server only (net.js); no browser save.
 // Every change goes through here and is broadcast with emit(event, data) so
 // the HUD, world and audio react without knowing about each other.
-import { CAR_GIFT, CARS, ECONOMY, PLAY_REWARD, TRACK, TREADMILLS } from './config.js'
+import { DEV_FREE_CARS, CAR_GIFT, CARS, ECONOMY, PLAY_REWARD, TRACK, TREADMILLS } from './config.js'
 
 export const state = {
   power: 0,
@@ -133,8 +133,8 @@ export function buyCar(id) {
     save()
     return 'equipped'
   }
-  if (state.wins < def.cost) return 'poor'
-  state.wins -= def.cost
+  if (!DEV_FREE_CARS && state.wins < def.cost) return 'poor'
+  if (!DEV_FREE_CARS) state.wins -= def.cost
   state.owned.push(id)
   state.car = id
   emit('wins', 0)
@@ -225,20 +225,16 @@ export function openChest() {
 }
 
 // --- Free Car podium -------------------------------------------------------------
-// The car it gives: CAR_GIFT.jump tiers above the best car owned, capped at the top car (null once
-// the top car is owned).
-// Legendary cars (CARS `legend`) are never gifted.
-const GIFTABLE = CARS.filter((c) => !c.legend)
+// The car it gives: the Tesla Roadster (CAR_GIFT.car).
+// The Free Car is always the Tesla Roadster (CAR_GIFT.car), after 2 h of online play; null once owned.
 export function giftCar() {
-  let best = 0
-  GIFTABLE.forEach((c, i) => state.owned.includes(c.id) && (best = i))
-  return best + 1 < GIFTABLE.length ? GIFTABLE[Math.min(best + CAR_GIFT.jump, GIFTABLE.length - 1)] : null
+  return state.owned.includes(CAR_GIFT.car) ? null : CARS.find((c) => c.id === CAR_GIFT.car) ?? null
 }
 // Gifted cars are a Rocket Edition (config CAR_GIFT.rocket): what the car view and the podium build.
 export const isRocket = (id = state.car) => gift.gifted.includes(id)
 export function carLook(id = state.car, rocket = isRocket(id)) {
   const def = carDef(id)
-  if (!rocket) return def
+  if (!rocket || def.legend) return def // the Tesla keeps its own look
   const r = CAR_GIFT.rocket
   return { ...def, kit: Math.max(def.kit ?? 0, r.kit), accent: def.accent ?? r.accent, flame: r.flame, rocket: true }
 }

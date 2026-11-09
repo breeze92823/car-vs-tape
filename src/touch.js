@@ -1,9 +1,9 @@
 // Touch controls, shown on coarse-pointer devices (and whenever a finger touches
 // the screen; a mouse click hides them again, so hybrid devices get whichever
 // they are using). Everything feeds inputState via input.js:
-//   left zone   - floating joystick (appears under the thumb) -> move, analog
-//   right zone  - one-finger drag -> look, two-finger pinch -> zoom
-//   buttons     - DRIFT (held handbrake), HORN, VIEW (cockpit / chase) and day/night
+//   left/right edges - hold to steer that way (both = straight); any edge finger = gas
+//   middle zone - one-finger drag -> look, two-finger pinch -> zoom
+//   buttons     - REV, DRIFT (held handbrake), HORN, VIEW (cockpit / chase) and day/night
 import './touch.css'
 import { COARSE_POINTER, TOUCH } from './config.js'
 import { inputState, requestLock, setTouchBrake, setTouchMove } from './input.js'
@@ -48,56 +48,33 @@ function setVisible(on) {
   if (!on) setTouchMove(0, 0)
 }
 
-function installJoystick(zone) {
-  const base = el('div', 'joy-base')
-  const knob = el('div', 'joy-knob')
-  base.appendChild(knob)
-  zone.appendChild(base)
+// Edge steering: hold the left edge to turn left, the right edge to turn right, both for
+// straight ahead. Any edge finger also means gas; the REV button reverses.
+const steer = { l: 0, r: 0, rev: false }
+function applySteer() {
+  const any = steer.l > 0 || steer.r > 0
+  const x = (steer.r > 0 ? 1 : 0) - (steer.l > 0 ? 1 : 0)
+  setTouchMove(x, steer.rev ? -1 : any ? 1 : 0)
+}
 
-  let id = null
-  let cx = 0
-  let cy = 0
-  let radius = 1
-
-  const release = () => {
-    id = null
-    base.classList.remove('active')
-    base.style.left = base.style.top = '' // back to its resting spot
-    knob.style.transform = ''
-    setTouchMove(0, 0)
+function installSteerEdge(zone, side) {
+  const ids = new Set()
+  const sync = () => {
+    steer[side] = ids.size
+    zone.classList.toggle('active', ids.size > 0)
+    applySteer()
   }
-
+  zone.appendChild(el('div', 'steer-arrow', side === 'l' ? '&#8249;' : '&#8250;'))
   zone.addEventListener('pointerdown', (e) => {
     if (!isFinger(e)) return requestLock()
-    if (id !== null) return
     e.preventDefault()
-    id = e.pointerId
-    capture(zone, id)
-    const zr = zone.getBoundingClientRect()
-    radius = base.offsetWidth / 2
-    cx = e.clientX
-    cy = e.clientY
-    base.style.left = `${cx - zr.left}px`
-    base.style.top = `${cy - zr.top}px`
-    base.classList.add('active')
+    capture(zone, e.pointerId)
+    ids.add(e.pointerId)
+    sync()
   })
-  zone.addEventListener('pointermove', (e) => {
-    if (e.pointerId !== id) return
-    let dx = e.clientX - cx
-    let dy = e.clientY - cy
-    const len = Math.hypot(dx, dy)
-    if (len > radius) {
-      dx *= radius / len
-      dy *= radius / len
-    }
-    knob.style.transform = `translate(${dx}px, ${dy}px)`
-    const mag = Math.min(len / radius, 1)
-    const live = mag < TOUCH.deadZone ? 0 : (mag - TOUCH.deadZone) / (1 - TOUCH.deadZone)
-    const k = len > 0 ? live / Math.min(len, radius) : 0
-    setTouchMove(dx * k, -dy * k)
-  })
-  zone.addEventListener('pointerup', (e) => e.pointerId === id && release())
-  zone.addEventListener('pointercancel', (e) => e.pointerId === id && release())
+  const up = (e) => ids.delete(e.pointerId) && sync()
+  zone.addEventListener('pointerup', up)
+  zone.addEventListener('pointercancel', up)
 }
 
 function installLook(zone) {
@@ -141,18 +118,36 @@ function installLook(zone) {
   zone.addEventListener('pointercancel', lift)
 }
 
-// actions: { day, horn, view } callbacks (the menu is Boxity's toolbar). The joystick drives
-// the car (up = throttle, down = brake/reverse, sideways = steer); DRIFT is a held handbrake;
+// actions: { day, horn, view } callbacks (the menu is Boxity's toolbar). Edge steering drives
+// the car (edge fingers = gas + steer, REV reverses); DRIFT is a held handbrake;
 // HORN honks; VIEW swaps the chase camera and the cockpit view (view() returns true in the cockpit).
 export function installTouch(actions) {
   const root = el('div', 'touch-root')
-  const left = el('div', 'touch-zone touch-left')
-  const right = el('div', 'touch-zone touch-right')
-  installJoystick(left)
-  installLook(right)
+  const left = el('div', 'touch-zone touch-steer touch-steer-l')
+  const right = el('div', 'touch-zone touch-steer touch-steer-r')
+  const mid = el('div', 'touch-zone touch-look')
+  installSteerEdge(left, 'l')
+  installSteerEdge(right, 'r')
+  installLook(mid)
 
   const top = el('div', 'touch-top')
   top.append(button('small', ICONS.day, actions.day))
+  const rev = el('button', 'touch-btn small rev', 'REV')
+  rev.type = 'button'
+  const revHold = (on) => (e) => {
+    e.preventDefault()
+    e.stopPropagation()
+    rev.classList.toggle('on', on)
+    steer.rev = on
+    applySteer()
+  }
+  rev.addEventListener('pointerdown', (e) => {
+    capture(rev, e.pointerId)
+    revHold(true)(e)
+  })
+  rev.addEventListener('pointerup', revHold(false))
+  rev.addEventListener('pointercancel', revHold(false))
+  top.append(rev)
 
   const cluster = el('div', 'touch-cluster')
   const drift = el('button', 'touch-btn jump', 'DRIFT')
@@ -192,7 +187,7 @@ export function installTouch(actions) {
   if (actions.horn) cluster.append(button('horn', 'HORN', () => actions.horn()))
   if (actions.view) cluster.append(button('mode', 'VIEW', (b) => b.classList.toggle('on', !!actions.view())))
 
-  root.append(left, right, top, cluster)
+  root.append(mid, left, right, top, cluster)
   document.body.appendChild(root)
 
   setVisible(COARSE_POINTER)

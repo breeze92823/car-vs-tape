@@ -2,7 +2,7 @@
 // (window.js / window.css, copied from Trains vs Spaghetti so both games share one layout).
 import './panels.css'
 import './panels-shop.css'
-import { CARS, TREADMILLS } from '../config.js'
+import { CARS, DEV_FREE_CARS, TREADMILLS } from '../config.js'
 import { fmt, rebirthCost, rebirthMult, state } from '../game.js'
 import { getAudioPrefs, setAudioPref, setAudioVolume } from '../audio.js'
 import { createWindow, legoButton, olText, replay } from './window.js'
@@ -79,10 +79,10 @@ export function createPanels(actions, icons) {
       const owned = state.owned.includes(k.def.id)
       const sel = state.car === k.def.id
       k.card.classList.toggle('sel', sel)
-      if (thumbs?.[k.def.id] && !k.pic.firstChild) k.pic.innerHTML = `<img alt="" src="${thumbs[k.def.id]}">`
-      const color = sel ? 'gw-white' : owned ? 'gw-blue' : state.wins >= k.def.cost ? 'gw-green' : 'gw-white disabled'
+      if (thumbs?.[k.def.id] && !k.pic.querySelector('img')) k.pic.insertAdjacentHTML('afterbegin', `<img alt="" src="${thumbs[k.def.id]}">`)
+      const color = sel ? 'gw-white' : owned ? 'gw-blue' : (DEV_FREE_CARS || state.wins >= k.def.cost) ? 'gw-green' : 'gw-white disabled'
       k.buy.className = `gw-btn gw-lego cs-buy ${color}`
-      k.buyText.textContent = sel ? 'Driving' : owned ? 'Drive' : `${fmt(k.def.cost)} Wins`
+      k.buyText.textContent = sel ? 'Driving' : owned ? 'Drive' : (DEV_FREE_CARS ? 'FREE (dev)' : `${fmt(k.def.cost)} Wins`)
     }
   }
   function loadThumbs() {

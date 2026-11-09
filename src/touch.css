@@ -23,51 +23,47 @@
   -webkit-tap-highlight-color: transparent;
 }
 
-/* --- Zones: the left part moves, the rest looks ------------------------------ */
+/* --- Zones: the edges steer, the middle looks ---------------------------------- */
 .touch-zone {
   position: absolute;
   top: 0;
   bottom: 0;
   pointer-events: auto;
 }
-.touch-left {
+.touch-steer {
+  width: 22%;
+  display: flex;
+  align-items: center;
+  background: rgba(255, 255, 255, 0.04);
+  transition: background 0.1s;
+}
+.touch-steer-l {
   left: 0;
-  width: 45%;
+  justify-content: flex-start;
+  padding-left: calc(var(--safe-l) + 8px);
+  border-right: 2px solid rgba(255, 255, 255, 0.18);
 }
-.touch-right {
+.touch-steer-r {
   right: 0;
-  width: 55%;
+  justify-content: flex-end;
+  padding-right: calc(var(--safe-r) + 8px);
+  border-left: 2px solid rgba(255, 255, 255, 0.18);
 }
-
-/* --- Floating joystick -------------------------------------------------------- */
-.joy-base {
-  --size: clamp(104px, 28vmin, 150px);
-  position: absolute;
-  /* Resting spot (a hint); while held it is moved under the thumb. */
-  left: calc(var(--safe-l) + var(--pad) + var(--size) / 2 + 8px);
-  top: calc(100% - var(--safe-b) - var(--pad) - var(--size) / 2 - 8px);
-  width: var(--size);
-  height: var(--size);
-  margin: calc(var(--size) / -2) 0 0 calc(var(--size) / -2);
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.12);
-  border: 2px solid rgba(255, 255, 255, 0.35);
-  opacity: 0.55;
-  transition: opacity 0.15s;
+.touch-steer.active {
+  background: rgba(255, 196, 64, 0.22);
 }
-.joy-base.active {
-  opacity: 1;
+.steer-arrow {
+  font-size: clamp(48px, 14vmin, 90px);
+  line-height: 1;
+  color: rgba(255, 255, 255, 0.5);
+  pointer-events: none;
 }
-.joy-knob {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  width: 44%;
-  height: 44%;
-  margin: -22% 0 0 -22%;
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.75);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+.touch-steer.active .steer-arrow {
+  color: #fff;
+}
+.touch-look {
+  left: 22%;
+  width: 56%;
 }
 
 /* --- Buttons -------------------------------------------------------------------- */

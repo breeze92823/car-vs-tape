@@ -1,5 +1,16 @@
 /* Car Shop: performance-kit cards (shopview.js) - live picture, glowing border, floating
    sparks and a tier ribbon, all in the car's accent colour (--sv-accent). */
+/* Loading shimmer until a card's picture arrives. */
+.cs-pic:not(:has(img))::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(100deg, rgba(255, 255, 255, 0.06) 30%, rgba(255, 255, 255, 0.28) 50%, rgba(255, 255, 255, 0.06) 70%) 0 0 / 250% 100%;
+  animation: sv-load 1.1s linear infinite;
+}
+@keyframes sv-load {
+  to { background-position: -150% 0; }
+}
 .sv-canvas {
   position: absolute;
   inset: 0;
@@ -11,7 +22,6 @@
   overflow: hidden;
   border-color: var(--sv-accent);
   box-shadow: inset 0 0 calc(18 * var(--wu)) color-mix(in srgb, var(--sv-accent) 55%, transparent);
-  animation: sv-glow 2.2s ease-in-out infinite;
 }
 .cs-card.sv-kit.sel {
   border-color: #2affff;
@@ -61,6 +71,7 @@
   border-radius: 50%;
   background: #fff;
   box-shadow: 0 0 calc(10 * var(--wu)) calc(3 * var(--wu)) var(--sv-accent);
+  will-change: transform, opacity;
   opacity: 0;
   animation: sv-rise 2.8s linear infinite;
 }
@@ -73,10 +84,6 @@
 .sv-sparks i:nth-child(7) { left: 88%; animation-delay: 0.3s; animation-duration: 3.6s; }
 .sv-sparks i:nth-child(8) { left: 95%; animation-delay: 2.4s; animation-duration: 2.6s; }
 
-@keyframes sv-glow {
-  0%, 100% { box-shadow: inset 0 0 calc(14 * var(--wu)) color-mix(in srgb, var(--sv-accent) 45%, transparent); }
-  50% { box-shadow: inset 0 0 calc(30 * var(--wu)) color-mix(in srgb, var(--sv-accent) 80%, transparent); }
-}
 @keyframes sv-sweep {
   0%, 55% { transform: translateX(-60%); }
   100% { transform: translateX(60%); }

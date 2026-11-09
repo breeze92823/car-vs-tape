@@ -51,8 +51,9 @@ export function createPostFx(renderer, scene, camera) {
       composer.setPixelRatio(renderer.getPixelRatio())
       composer.setSize(w, h)
     },
-    render() {
-      if (enabled && composer) composer.render()
+    // cheap: skip MSAA + bloom (a window covers the town, so nobody sees them).
+    render(cheap = false) {
+      if (enabled && composer && !cheap) composer.render()
       else renderer.render(scene, camera)
     },
   }

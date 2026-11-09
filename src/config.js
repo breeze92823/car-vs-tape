@@ -6,6 +6,8 @@ export const GAME_TITLE = 'Car vs Tape'
 
 // Forces the Bloxity SDK and avatar CDN to be treated as unavailable (see .env.example).
 export const DEV_MODE = import.meta.env.VITE_DEV_MODE === 'true'
+// Dev only: every car is free to equip (VITE_DEV_FREE_CARS). import.meta.env.DEV is false in production builds.
+export const DEV_FREE_CARS = import.meta.env.DEV && import.meta.env.VITE_DEV_FREE_CARS === 'true'
 
 // --- World (metres: +X east, +Z south, +Y up) -------------------------------
 export const GROUND_Y = 0
@@ -451,13 +453,14 @@ export const CARS = [
   { id: 'redline', name: 'Redline X', type: 'wedge', color: '#e3101e', cost: 6000, mult: 45, speed: 39, kit: 2, accent: '#ffffff', flame: ['#fff2d8', '#ff2a1a'] },
   { id: 'frost', name: 'Frostbite', type: 'wedge', color: '#2a6bff', cost: 18000, mult: 80, speed: 41, kit: 2, accent: '#7df6ff', flame: ['#e8fdff', '#2a8bff'] },
   { id: 'onyx', name: 'Onyx', type: 'wedge', color: '#16161c', cost: 55000, mult: 150, speed: 43, kit: 3, accent: '#2affe8', flame: ['#e0fffb', '#00d0ff'] },
-  { id: 'nebula', name: 'Nebula', type: 'wedge', color: '#a43bff', cost: 160000, mult: 300, speed: 46, kit: 3, accent: '#ff4fd8', flame: ['#ffe0ff', '#b03bff'] },
   // Legendary (`legend`): the Tesla Roadster (id kept from the earlier Zenith, so saves stay valid).
-  // Never a Free Car gift; it flies laps round the golden sky dais over the showroom (town.js)
+  // It is the Free Car (CAR_GIFT: 2 h of online play) and can also be bought; no longer the top car
+  // (Nebula is). It flies laps round the golden sky dais over the showroom (town.js)
   // instead of a showroom podium, gets the gold card first in the Car Shop and a legendary buy
   // celebration. `thrusters`: hidden rocket thrusters (carmodel.js) for BOOST (red light trails,
   // white smoke) and Space-to-FLY (rocket.js). `paint: 'silver'`: liquid-metal bodywork.
-  { id: 'zenith', name: 'Tesla Roadster', type: 'roadster', color: '#d9dee6', cost: 600000, mult: 650, speed: 50, thrusters: true, legend: true, paint: 'silver', accent: '#2ad8ff' },
+  { id: 'zenith', name: 'Tesla Roadster', type: 'roadster', color: '#d9dee6', cost: 100000, mult: 220, speed: 44, thrusters: true, legend: true, paint: 'silver', accent: '#2ad8ff' },
+  { id: 'nebula', name: 'Nebula', type: 'wedge', color: '#a43bff', cost: 160000, mult: 300, speed: 46, kit: 3, accent: '#ff4fd8', flame: ['#ffe0ff', '#b03bff'] },
 ]
 
 // House wall colours around the plaza.
@@ -498,4 +501,4 @@ export const PLAY_REWARD = { minutes: 60, boost: 15 * 60, winsShare: 0.3, winsMi
 // the gift is (capped at the top car). Gifted cars are a Rocket Edition (`rocket`): at least
 // performance kit `kit` (jets, neon, light trails) even on a hatch, the car's own accent or `accent`,
 // rocket-orange afterburners (`flame`) and a rocket exhaust of fire, smoke and glitter (car.js).
-export const CAR_GIFT = { minutes: 30, jump: 2, rocket: { kit: 2, accent: '#ffd21a', flame: ['#fff6d0', '#ff5a0a'] } }
+export const CAR_GIFT = { minutes: 120, car: 'zenith', jump: 2,rocket: { kit: 2, accent: '#ffd21a', flame: ['#fff6d0', '#ff5a0a'] } }

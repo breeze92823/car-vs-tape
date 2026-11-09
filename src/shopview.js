@@ -16,6 +16,9 @@ import { createFx } from './fx.js'
 export function createShopView({ renderer, envScene, driver, quality = 1 }) {
   let built = null
   let pending = null
+  let queue = []
+  let visible = []
+  let visCount = 0
   let scene = null
   let fx = null
   let rr = 0
@@ -35,9 +38,17 @@ export function createShopView({ renderer, envScene, driver, quality = 1 }) {
     fx = createFx(scene, quality)
     fx.setBloom?.(false)
     built = []
-    const cards = document.querySelectorAll('.cs-card')
+    queue = []
     CARS.forEach((def, i) => {
-      if (!def.kit && !def.thrusters) return
+      if (def.kit || def.thrusters) queue.push([def, i])
+    })
+  }
+
+  // One car per frame, so opening the shop never stalls on building them all at once.
+  function buildNext() {
+    const [def, i] = queue.shift()
+    {
+      const cards = document.querySelectorAll('.cs-card')
       const card = cards[i]
       const pic = card?.querySelector('.cs-pic')
       if (!pic) return
@@ -66,7 +77,7 @@ export function createShopView({ renderer, envScene, driver, quality = 1 }) {
       sparks.innerHTML = '<i></i>'.repeat(8)
       card.appendChild(sparks)
       built.push({ def, parts, holder, canvas, ctx: canvas.getContext('2d'), phase: Math.random() * 6, burstT: 1 + Math.random() * 3, burst: 0, emitT: 0, glitterT: 0 })
-    })
+    }
   }
 
   const isOpen = () => {
@@ -213,7 +224,55 @@ export function createShopView({ renderer, envScene, driver, quality = 1 }) {
     b.ctx.drawImage(full, 0, full.height - ch, cw, ch, 0, 0, cw, ch)
   }
 
+  // compile() only builds the shaders: each car's geometry and textures reach the GPU on its first
+  // draw, which used to land on the first time the Car Shop opened (a few seconds of stutter). Draw
+  // every car once into a 2 px corner, one per tick, so that upload happens in the background.
+  function warmUploads() {
+    let i = 0
+    const step = () => {
+      const b = built[i++]
+      if (!b) return
+      try {
+        const hx = b.holder.position.x
+        cam.aspect = 16 / 10
+        cam.updateProjectionMatrix()
+        cam.position.set(hx + 4.2, 2.1, -5.6)
+        cam.lookAt(hx, 0.55, -0.4)
+        renderer.getViewport(savedViewport)
+        renderer.setRenderTarget(null)
+        renderer.setScissorTest(true)
+        renderer.setViewport(0, 0, 2, 2)
+        renderer.setScissor(0, 0, 2, 2)
+        renderer.render(scene, cam)
+        renderer.setScissorTest(false)
+        renderer.setViewport(savedViewport)
+      } catch {}
+      setTimeout(step, 200)
+    }
+    step()
+  }
+
   return {
+    // Called a few seconds after the game starts: builds the live cars one by one and compiles
+    // their shaders in the background, so opening the Car Shop doesn't stall.
+    prewarm() {
+      if (pending) return
+      pending = Promise.race([driver.whenLoaded, new Promise((r) => setTimeout(r, 2500))]).then(() => {
+        build()
+        const next = () => {
+          if (queue.length) {
+            buildNext()
+            setTimeout(next, 150)
+          } else if (built.length) {
+            try {
+              renderer.compile(scene, cam)
+            } catch {}
+            warmUploads()
+          }
+        }
+        next()
+      })
+    },
     // Every frame, before the main render.
     render(dt, elapsed) {
       if (!isOpen()) return
@@ -221,17 +280,22 @@ export function createShopView({ renderer, envScene, driver, quality = 1 }) {
         pending ??= Promise.race([driver.whenLoaded, new Promise((r) => setTimeout(r, 2500))]).then(build)
         return
       }
+      if (queue.length) buildNext()
       if (!built.length) return
-      const strip = document.querySelector('.cs-strip').getBoundingClientRect()
-      const visible = built.filter((b) => {
-        const r = b.canvas.getBoundingClientRect()
-        return r.width > 0 && r.right > strip.left && r.left < strip.right
-      })
+      // Layout reads are costly, so refresh which cards are on screen only every few frames.
+      if (visCount-- <= 0 || !visible.length) {
+        visCount = 8
+        const strip = document.querySelector('.cs-strip').getBoundingClientRect()
+        visible = built.filter((b) => {
+          const r = b.canvas.getBoundingClientRect()
+          return r.width > 0 && r.right > strip.left && r.left < strip.right
+        })
+      }
       if (!visible.length) return
       for (const b of visible) animate(b, dt, elapsed)
       fx.update(dt, cam, (visible[0].canvas.clientHeight || 150) * renderer.getPixelRatio())
-      const n = Math.min(visible.length, quality < 0.5 ? 1 : 2)
-      for (let k = 0; k < n; k++) draw(visible[rr++ % visible.length])
+      // One picture per frame: each GPU -> 2D canvas copy stalls the pipeline.
+      draw(visible[rr++ % visible.length])
     },
   }
 }

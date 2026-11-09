@@ -246,7 +246,7 @@ async function openGift() {
       game.openGift(def.id)
       hud.flash('#ffd21a')
       hud.banner(`FREE CAR: ${def.name.toUpperCase()}!`, '#ffd21a')
-      hud.toast(`${def.name} Rocket Edition is yours! x${def.mult} Power`, 'good')
+      hud.toast(`${def.name} is yours! It flies (Space)! x${def.mult} Power`, 'good')
     } else if (r.reason === 'early') hud.toast(`Play ${minutesLeft(Math.max(1, game.giftLeft()))} more to drive ${def.name} home free`)
     else if (r.reason === 'signin') hud.toast(`Sign in to Bloxity (top-left) to win ${def.name} free!`, 'bad')
     else if (r.reason === 'owned') {
@@ -400,8 +400,10 @@ let thumbPromise = null
 function makeThumbnails() {
   const avatar = Promise.race([carView.driver.whenLoaded, new Promise((r) => setTimeout(r, 2500))])
   thumbPromise ??= avatar.then(() => new Promise((resolve) => {
-    requestAnimationFrame(() => {
-      const out = {}
+    // One car per frame: building + rendering every car in a single frame froze the game when
+    // the Car Shop first opened.
+    const out = {}
+    {
       const ts = new Scene()
       ts.background = new Color('#3b5fd8')
       ts.environment = scene.environment
@@ -419,26 +421,29 @@ function makeThumbnails() {
       c2.width = W
       c2.height = H
       const ctx = c2.getContext('2d')
-      const fullH = renderer.domElement.height
-      renderer.setScissorTest(true)
-      for (const def of CARS) {
+      let idx = 0
+      const step = () => {
+        const def = CARS[idx++]
+        if (!def) return resolve(out)
+        const fullH = renderer.domElement.height
         const parts = buildCar(def)
         carView.driver.seatPreview(parts)
         const m = parts.root
         m.rotation.y = 0.55
         ts.add(m)
+        renderer.setScissorTest(true)
         renderer.setViewport(0, 0, W, H)
         renderer.setScissor(0, 0, W, H)
         renderer.render(ts, cam)
         ctx.drawImage(renderer.domElement, 0, fullH - H * dpr, W * dpr, H * dpr, 0, 0, W, H)
         out[def.id] = c2.toDataURL('image/png')
         ts.remove(m)
+        renderer.setScissorTest(false)
+        renderer.setViewport(0, 0, window.innerWidth, window.innerHeight)
+        requestAnimationFrame(step)
       }
-      renderer.setScissorTest(false)
-      renderer.setViewport(0, 0, window.innerWidth, window.innerHeight)
-      postfx.render()
-      resolve(out)
-    })
+      requestAnimationFrame(step)
+    }
   }))
   return thumbPromise
 }
@@ -523,8 +528,10 @@ function frame() {
   })
   game.tick(rawDt)
   syncAdScreen()
+  const windowOpen = hud.isOpen()
+  renderer.shadowMap.autoUpdate = !windowOpen // town is frozen behind a window: keep the shadow maps
   shopView.render(rawDt, elapsed) // before the main render: it borrows the canvas's corner
-  postfx.render()
+  postfx.render(windowOpen)
 
   if (shownLoading) {
     readySince += rawDt
@@ -535,6 +542,8 @@ function frame() {
   }
 }
 renderer.setAnimationLoop(frame)
+// Warm the Car Shop in the background (pictures, live cars, shaders) so it opens instantly.
+setTimeout(() => makeThumbnails().then(() => setTimeout(() => shopView.prewarm(), 500)), 5000)
 
 window.addEventListener('beforeunload', () => {
   game.save()
@@ -543,6 +552,19 @@ window.addEventListener('beforeunload', () => {
 document.addEventListener('visibilitychange', () => document.hidden && game.save())
 
 if (import.meta.env.DEV) {
+  // Dev only (never in a build): ?car=<id> owns and drives that car, e.g. ?car=zenith for the Tesla
+  // Roadster. Applied again after the server's progress lands (hydrate puts the saved car back).
+  const testCar = new URLSearchParams(location.search).get('car')
+  if (testCar && CARS.some((c) => c.id === testCar)) {
+    const drive = () => {
+      if (!game.state.owned.includes(testCar)) game.state.owned.push(testCar)
+      if (game.state.car === testCar) return
+      game.state.car = testCar
+      game.emit('car', testCar)
+    }
+    drive()
+    game.on('hydrate', () => setTimeout(drive, 0))
+  }
   import('./devviews.js').then((m) => (window.__game.views = m.makeViews(window.__game)))
   window.__game = { pause: () => renderer.setAnimationLoop(null), resume: () => renderer.setAnimationLoop(frame), buildCar, CARS, car, scene, renderer, camera, postfx, fx, game, track, town, bodies: bodyCount, net, remotes, goHome, goTrain, goTrack, teleport: teleportCar, rocket, carView, frame }
 }

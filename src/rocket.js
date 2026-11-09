@@ -1,5 +1,5 @@
 ﻿import './rocket.css'
-import { Vector3 } from 'three'
+import { Euler, Quaternion, Vector3 } from 'three'
 import { CAR, FLIGHT, ROCKET, TRACK } from './config.js'
 import { car } from './car.js'
 import { RAPIER, onTick, world } from './physics.js'
@@ -239,9 +239,18 @@ export function createRocketVisual({ view, st, fx, scene }) {
   let groundT = 0
   let was = false
   let trails = null
+  let bank = 0 // eased roll into the turn while flying / boosting
+  let pitchUp = 0
+  let lastYaw = null
+  let tilted = false // the wheels are carrying the bank / pitch (restore them once it is gone)
+  const tiltE = new Euler()
+  const tiltQ = new Quaternion()
+  const steerQ = new Quaternion()
+  const UP = new Vector3(0, 1, 0)
   const tmp = new Vector3()
 
-  const ensureTrails = () => (trails ??= scene ? [makeTrail(scene), makeTrail(scene)] : [])
+  // Per tail lamp: an upright ribbon + a flat one, so the trail reads as a thick glowing tube from any angle.
+  const ensureTrails = () => (trails ??= scene ? [0, 1, 2, 3].map(() => makeTrail(scene, { gain: 2 })) : [])
 
   return {
     get heat() {
@@ -291,7 +300,7 @@ export function createRocketVisual({ view, st, fx, scene }) {
         extra = parts.jets.length || th.rear.length
           ? []
           : parts.exhaustTips.map((tip) => {
-              const f = makeFlame(0.13, '#ffffff', '#5fd0ff')
+              const f = makeFlame(0.19, '#ffffff', '#5fd0ff')
               f.position.set(tip.x, tip.y, tip.z + 0.08)
               f.visible = false
               parts.body.add(f)
@@ -301,9 +310,41 @@ export function createRocketVisual({ view, st, fx, scene }) {
       }
       heat += ((burning ? 1 : 0) - heat) * Math.min(1, dt * (burning ? 10 : 2.5))
       lift += ((flying ? 1 : 0) - lift) * Math.min(1, dt * (flying ? 8 : 3))
-      const active = heat > 0.01 || lift > 0.01
+      // Turn rate from the rendered heading (works for remote cars too, which have no yawRate).
+      const yawNow = st.renderYaw
+      const turn = lastYaw === null || dt <= 0 ? 0 : Math.atan2(Math.sin(yawNow - lastYaw), Math.cos(yawNow - lastYaw)) / dt
+      lastYaw = yawNow
+      const active = heat > 0.01 || lift > 0.01 || Math.abs(bank) > 0.005
       if (!active && !was) return // nothing burning and everything already switched off
       was = active
+
+      // Bank into the turn like a plane while flying (hard, up to ~45 degrees), a little while
+      // boosting on the road; nose up while climbing. On top of car.js's suspension pose.
+      const bankK = Math.max(lift, heat * 0.35)
+      const bankTarget = Math.max(-0.8, Math.min(0.8, -turn * 0.38)) * bankK
+      bank += (bankTarget - bank) * Math.min(1, dt * 5)
+      const vy = st.velocity?.y ?? 0
+      pitchUp += (Math.max(-0.12, Math.min(0.22, vy * 0.05)) * lift - pitchUp) * Math.min(1, dt * 4)
+      parts.body.rotation.z += bank
+      parts.body.rotation.x -= pitchUp
+      parts.body.position.y += Math.abs(bank) * 0.25 // roll about the middle, not the floor
+      // The wheels hang off the car root, not the body: give them the same bank / pitch about the
+      // body's origin so they stay in their arches (steering kept, spin untouched). One more pass
+      // after the tilt is gone puts them back exactly.
+      const tilt = Math.abs(bank) > 0.004 || Math.abs(pitchUp) > 0.004
+      if (tilt || tilted) {
+        tiltE.set(tilt ? -pitchUp : 0, 0, tilt ? bank : 0)
+        tiltQ.setFromEuler(tiltE)
+        const rise = tilt ? Math.abs(bank) * 0.25 : 0
+        for (const w of parts.wheels) {
+          w.base ??= w.pivot.position.clone()
+          w.pivot.position.copy(w.base).applyQuaternion(tiltQ)
+          w.pivot.position.y += rise
+          steerQ.setFromAxisAngle(UP, w.front ? -(st.steerAngle ?? 0) : 0)
+          w.pivot.quaternion.copy(tiltQ).multiply(steerQ)
+        }
+        tilted = tilt
+      }
 
       const th = parts.thrusters ?? { rear: [], down: [] }
       const flick = 0.88 + Math.random() * 0.24
@@ -314,10 +355,11 @@ export function createRocketVisual({ view, st, fx, scene }) {
         for (const j of parts.jets) j.flame?.userData.set(elapsed, 1.1 + heat * 0.7, (1.6 + heat * 3.2) * flick, 1 + heat * 0.45)
         parts.under.material.opacity = Math.max(parts.under.material.opacity, 0.5 + heat * 0.5)
       }
+      const rearK = Math.max(heat, lift * 0.55) // the rear thrusters push the car along in flight too
       for (const n of th.rear) {
         if (!n.flame) continue
-        n.flame.visible = heat > 0.02
-        if (n.flame.visible) n.flame.userData.set(elapsed, 0.8 + heat, (0.4 + heat * 2.2) * flick, 0.9 + heat * 0.4)
+        n.flame.visible = rearK > 0.02
+        if (n.flame.visible) n.flame.userData.set(elapsed, 0.8 + rearK, (0.4 + rearK * 2.2) * flick, 0.9 + rearK * 0.4)
       }
       for (const f of extra) {
         f.visible = heat > 0.02
@@ -340,10 +382,10 @@ export function createRocketVisual({ view, st, fx, scene }) {
         const rz = -Math.sin(yaw)
         const tr = ensureTrails()
         for (let i = 0; i < tr.length; i++) {
-          const tp = parts.trailPoints?.[i]
+          const tp = parts.trailPoints?.[i % 2]
           if (!tp) continue
           parts.body.localToWorld(tmp.set(tp[0] * 0.98, tp[1], tp[2] + 0.04))
-          tr[i].update(tmp.x, tmp.y, tmp.z, rx, rz, elapsed, trailOn, { width: 0.07, life: 1.1, spacing: 0.25, vertical: true })
+          tr[i].update(tmp.x, tmp.y, tmp.z, rx, rz, elapsed, trailOn, { width: 0.13, life: 2, spacing: 0.5, vertical: i < 2 })
         }
       }
       if (lod <= 0) return
@@ -353,12 +395,15 @@ export function createRocketVisual({ view, st, fx, scene }) {
       const fxv = Math.sin(yaw)
       const fzv = Math.cos(yaw)
       smokeT -= dt
-      if (heat > 0.05 && smokeT <= 0) {
+      // Smoke while boosting, and out of the rear thrusters while flying at speed.
+      const cruise = th.rear.length ? lift * Math.min(1, Math.max(0, (Math.hypot(v.x, v.z) - 6) / 10)) : 0
+      const smokeK = Math.max(heat, cruise * 0.75)
+      if (smokeK > 0.05 && smokeT <= 0) {
         smokeT = 0.02 / lod
         const nozzles = parts.jets.length ? parts.jets : th.rear.length ? th.rear : parts.exhaustTips.length ? parts.exhaustTips : [{ x: 0, y: 0.4, z: parts.dims.back }]
         for (const n of nozzles) {
           parts.body.localToWorld(tmp.set(n.x, n.y, n.z - 0.7 - Math.random() * 0.9))
-          fx.smoke({ x: tmp.x, y: tmp.y, z: tmp.z, vx: v.x * 0.15 - fxv * 2 + rnd(0.8), vy: 0.3 + Math.random() * 0.5, vz: v.z * 0.15 - fzv * 2 + rnd(0.8), life: 2.2, size: 0.6, sizeEnd: 3.8, color: '#f4f6fa', alpha: 0.42 * heat, drag: 2 })
+          for (let k = 0; k < (nozzles.length > 1 ? 1 : 2); k++) fx.smoke({ x: tmp.x + rnd(0.15), y: tmp.y, z: tmp.z + rnd(0.15), vx: v.x * 0.15 - fxv * 2 + rnd(0.8), vy: 0.3 + Math.random() * 0.5, vz: v.z * 0.15 - fzv * 2 + rnd(0.8), life: 2.4, size: 0.9, sizeEnd: 4.6, color: '#f4f6fa', alpha: 0.55 * smokeK, drag: 2 })
           if (Math.random() < 0.5 * lod) fx.glow({ x: tmp.x, y: tmp.y, z: tmp.z, vx: v.x * 0.5 - fxv * 10 + rnd(1.5), vy: rnd(0.8), vz: v.z * 0.5 - fzv * 10 + rnd(1.5), life: 0.25, size: 0.3 * heat, sizeEnd: 0.05, color: Math.random() < 0.5 ? '#ffffff' : parts.jets.length ? parts.flameColor : '#9fe6ff', drag: 3 })
         }
       }
