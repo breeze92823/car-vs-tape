@@ -85,7 +85,7 @@ export const nextTape = () => Math.min(state.bestTape + 1, TRACK.tapes.length - 
 // Power comes in fixed ticks (like the "+1" popups): a tick lands every POWER_TICK
 // seconds of full-speed driving and pays basePower x every multiplier, so with no
 // car / rebirth / level / treadmill bonus it is always +1.
-const POWER_TICK = 0.5
+const POWER_TICK = 1
 let tickT = 0
 // Called every frame while the car is driving/training. speed: m/s of the wheels.
 export function train(dt, speed, padMult) {
