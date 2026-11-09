@@ -183,7 +183,11 @@ export function setChest(s, running) {
       if (Number.isFinite(c.playMs)) gift.playMs = Math.max(0, c.playMs)
       if (Number.isFinite(c.needMs) && c.needMs > 0) gift.needMs = c.needMs
       if (Number.isFinite(c.gifts)) gift.gifts = c.gifts
-      if (Array.isArray(c.gifted)) gift.gifted = c.gifted.filter((id) => typeof id === 'string')
+      if (Array.isArray(c.gifted)) {
+        const was = gift.gifted.join()
+        gift.gifted = c.gifted.filter((id) => typeof id === 'string')
+        if (gift.gifted.join() !== was) emit('look') // the equipped car may have become a Rocket Edition
+      }
     }
   } else if (chest.known) {
     chest.playMs = chestPlayMs() // freeze where it got to
@@ -221,11 +225,22 @@ export function openChest() {
 }
 
 // --- Free Car podium -------------------------------------------------------------
-// The car it gives: the next one above the best car owned (null once the top car is owned).
+// The car it gives: CAR_GIFT.jump tiers above the best car owned, capped at the top car (null once
+// the top car is owned).
+// Legendary cars (CARS `legend`) are never gifted.
+const GIFTABLE = CARS.filter((c) => !c.legend)
 export function giftCar() {
   let best = 0
-  CARS.forEach((c, i) => state.owned.includes(c.id) && (best = i))
-  return CARS[best + 1] ?? null
+  GIFTABLE.forEach((c, i) => state.owned.includes(c.id) && (best = i))
+  return best + 1 < GIFTABLE.length ? GIFTABLE[Math.min(best + CAR_GIFT.jump, GIFTABLE.length - 1)] : null
+}
+// Gifted cars are a Rocket Edition (config CAR_GIFT.rocket): what the car view and the podium build.
+export const isRocket = (id = state.car) => gift.gifted.includes(id)
+export function carLook(id = state.car, rocket = isRocket(id)) {
+  const def = carDef(id)
+  if (!rocket) return def
+  const r = CAR_GIFT.rocket
+  return { ...def, kit: Math.max(def.kit ?? 0, r.kit), accent: def.accent ?? r.accent, flame: r.flame, rocket: true }
 }
 // Seconds of play left before the free car (0 = ready); -1 while it can't be earned (unknown, guest).
 export const giftLeft = () => (chest.known && chest.signedIn ? Math.max(0, (gift.needMs - giftPlayMs()) / 1000) : -1)
@@ -235,6 +250,7 @@ export function openGift(id) {
   const def = carDef(id)
   if (def.id !== id) return null
   if (!state.owned.includes(id)) state.owned.push(id)
+  if (!gift.gifted.includes(id)) gift.gifted.push(id)
   state.car = id
   emit('gift', def)
   emit('car', id)

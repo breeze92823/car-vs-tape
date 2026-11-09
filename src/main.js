@@ -18,8 +18,10 @@ import { buildCar } from './carmodel.js'
 import { createHud } from './hud.js'
 import { installAudio, isMuted, setAudioPref, sfx, toggleMute, updateEngine } from './audio.js'
 import * as game from './game.js'
-import { claimCar, claimChest, hasServer, initNet, net, sendEmote, verifyAdReward } from './net.js'
+import { claimCar, claimChest, hasServer, initNet, net, sendEmote, setRocketSource, verifyAdReward } from './net.js'
 import { createRemotes } from './remotes.js'
+import { createRocket } from './rocket.js'
+import { createShopView } from './shopview.js'
 
 // Boot: Bloxity SDK -> renderer -> Rapier -> sky/lighting, ground, town, track,
 // car -> HUD -> loop. The SDK is optional at every step.
@@ -84,7 +86,10 @@ bloxity.loadingStep('Building the town')
 buildGround(scene)
 createCarBody()
 const carView = createCarView(scene, fx, preset)
-carView.setCar(game.carDef())
+const rocket = createRocket({ carView, fx, scene }) // Shift / BOOST: a charged burst past top speed; Space / FLY on the Tesla Roadster
+setRocketSource(rocket) // relayed to the other players (pose flags rocket / flying)
+const shopView = createShopView({ renderer, envScene: scene, driver: carView.driver, quality: preset.particles }) // live jet-car pictures in the Car Shop
+carView.setCar(game.carLook())
 setCameraDriver(carView.driver) // the cockpit view sits at the driver's eyes
 const remotes = createRemotes({ scene, fx, preset }) // the other players' cars, avatars and name plates
 // H / HORN: honk, and the driver punches the wheel.
@@ -241,7 +246,7 @@ async function openGift() {
       game.openGift(def.id)
       hud.flash('#ffd21a')
       hud.banner(`FREE CAR: ${def.name.toUpperCase()}!`, '#ffd21a')
-      hud.toast(`${def.name} is yours! x${def.mult} Power`, 'good')
+      hud.toast(`${def.name} Rocket Edition is yours! x${def.mult} Power`, 'good')
     } else if (r.reason === 'early') hud.toast(`Play ${minutesLeft(Math.max(1, game.giftLeft()))} more to drive ${def.name} home free`)
     else if (r.reason === 'signin') hud.toast(`Sign in to Bloxity (top-left) to win ${def.name} free!`, 'bad')
     else if (r.reason === 'owned') {
@@ -274,7 +279,21 @@ const hud = createHud({
   },
   onBuy(id) {
     const r = game.buyCar(id)
-    if (r === 'bought') {
+    if (r === 'bought' && game.carDef(id).legend) {
+      // Legendary: close the shop so the takeoff shows (car.js), and celebrate in gold.
+      const def = game.carDef(id)
+      hud.close()
+      sfx.buy()
+      sfx.levelUp()
+      hud.flash('#ffd21a')
+      hud.banner(`LEGENDARY: ${def.name.toUpperCase()}!`, '#ffd21a')
+      hud.toast(`${def.name} is yours! x${def.mult} Power${def.fly || def.thrusters ? ', and it flies (Space)' : ''}`, 'good')
+      shakeCamera(0.6)
+      const p = car.position
+      fx.confetti(p.x, 3, p.z, 260, ['#ffd21a', '#fff2b0', '#ffffff', '#ff9a00'], 15)
+      for (let i = 0; i < 3; i++) setTimeout(() => fx.ring(car.position.x, 0.2, car.position.z, '#ffd21a', 8 + i * 5, 0.9, true), i * 220)
+      fx.sparks(p.x, 1.5, p.z, 160, ['#ffd21a', '#ffffff', '#ff9a00'], 14, 1.2, 0.7, -6)
+    } else if (r === 'bought') {
       sfx.buy()
       hud.toast(`New car: ${game.carDef(id).name}!`, 'good')
     } else if (r === 'poor') {
@@ -292,8 +311,9 @@ const hud = createHud({
   thumbnails: makeThumbnails,
 })
 
+game.on('look', () => carView.setCar(game.carLook()))
 game.on('car', (id) => {
-  carView.setCar(game.carDef(id))
+  carView.setCar(game.carLook(id))
   town.refresh()
   const p = car.position
   fx.sparks(p.x, 1, p.z, 50, ['#2affff', '#ffffff', '#ffd21a'], 9, 0.9, 0.6)
@@ -372,7 +392,7 @@ window.addEventListener(
   },
   { capture: true },
 )
-installTouch({ day: () => lighting.toggleDayNight(), horn: honk, view: toggleCockpit })
+installTouch({ day: () => lighting.toggleDayNight(), horn: honk, view: toggleCockpit, boost: () => rocket.fire(), fly: (on) => rocket.setFly(on) })
 
 // --- Car shop thumbnails: rendered once with the game's own renderer -------------------------
 // Each car has the player's avatar at the wheel, waving (waits up to 2.5 s for it to load).
@@ -471,6 +491,7 @@ function frame() {
   night += ((lighting.isNight() ? 1 : 0) - night) * Math.min(1, dt / 2)
   carView.setNight(night)
   carView.update(dt, camera, elapsed, boosted)
+  rocket.update(dt, elapsed) // after the car view: it overrides the flames while boosting
   remotes.update(dt, camera, elapsed, night)
   updateCamera(camera, rawDt)
   town.update(dt, elapsed, p)
@@ -498,10 +519,11 @@ function frame() {
     nextTape: game.nextTape(),
     prompt: activeZone?.prompt,
     onTrack: car.position.z < TRACK.startZ,
-    speedLines: Math.max(0, (speedK - 0.85) / 0.15) * 0.35 + (boosted && car.throttle > 0.5 ? 0.2 : 0),
+    speedLines: Math.max(0, (speedK - 0.85) / 0.15) * 0.35 + (boosted && car.throttle > 0.5 ? 0.2 : 0) + (rocket.burning ? 0.5 : 0),
   })
   game.tick(rawDt)
   syncAdScreen()
+  shopView.render(rawDt, elapsed) // before the main render: it borrows the canvas's corner
   postfx.render()
 
   if (shownLoading) {
@@ -522,5 +544,5 @@ document.addEventListener('visibilitychange', () => document.hidden && game.save
 
 if (import.meta.env.DEV) {
   import('./devviews.js').then((m) => (window.__game.views = m.makeViews(window.__game)))
-  window.__game = { pause: () => renderer.setAnimationLoop(null), resume: () => renderer.setAnimationLoop(frame), buildCar, CARS, car, scene, renderer, camera, postfx, fx, game, track, town, bodies: bodyCount, net, remotes, goHome, goTrain, goTrack, teleport: teleportCar }
+  window.__game = { pause: () => renderer.setAnimationLoop(null), resume: () => renderer.setAnimationLoop(frame), buildCar, CARS, car, scene, renderer, camera, postfx, fx, game, track, town, bodies: bodyCount, net, remotes, goHome, goTrain, goTrack, teleport: teleportCar, rocket, carView, frame }
 }

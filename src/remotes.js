@@ -10,6 +10,7 @@ import { COARSE_POINTER, FOG } from './config.js'
 import { createCarView } from './car.js'
 import { label, relabel } from './propkit.js'
 import { sfx } from './audio.js'
+import { createRocketVisual } from './rocket.js'
 import * as game from './game.js'
 import { POSE_FLAGS, roster } from './net.js'
 import * as bloxity from './bloxity.js'
@@ -31,6 +32,8 @@ const HIDE_PAST = 0.92 // of the fog end
 const FX_RANGE = 45 // m: particles
 const DRIVER_RANGE = 55 // m: avatar animation
 const HORN_RANGE = 30 // m: you hear their horn
+const ROCKET_FULL = 28 // m: rocket smoke + trails at full strength
+const ROCKET_SHOCK = 90 // m: the ignition shockwave rings are still drawn (flames always are)
 
 export function createRemotes({ scene, fx, preset }) {
   const maxShown = COARSE_POINTER ? 6 : preset.particles >= 1 ? 18 : 10
@@ -68,11 +71,13 @@ export function createRemotes({ scene, fx, preset }) {
     })
     const plate = label('', 0.8, PLATE)
     scene.add(plate)
-    return { id, st, look, view, plate, car: null, lookKey: '', propsKey: '', plateText: '', emoteN: null, fresh: true, boosted: false, uid: '', name: '' }
+    const rocket = createRocketVisual({ view, st, fx, scene })
+    return { id, st, look, view, rocket, rocketOn: false, flying: false, plate, car: null, lookKey: '', propsKey: '', plateText: '', emoteN: null, fresh: true, boosted: false, uid: '', name: '' }
   }
 
   function drop(e) {
     scene.remove(e.view.root, e.plate)
+    e.rocket.dispose()
     e.view.driver.dispose()
     e.view.root.traverse((o) => o.geometry?.dispose?.())
     e.plate.material.map?.dispose()
@@ -89,6 +94,8 @@ export function createRemotes({ scene, fx, preset }) {
     st.handbrake = !!(f & POSE_FLAGS.handbrake)
     st.pad = f & POSE_FLAGS.pad ? (st.pad ?? { accent: '#7dff5a' }) : null
     e.boosted = !!(f & POSE_FLAGS.boosted)
+    e.rocketNow = !!(f & POSE_FLAGS.rocket)
+    e.flying = !!(f & POSE_FLAGS.flying)
     st.stun = f & POSE_FLAGS.stunned ? 1 : 0
     st.steer = p.steer
     st.throttle = p.thr
@@ -189,7 +196,12 @@ export function createRemotes({ scene, fx, preset }) {
       const shown = new Set()
       for (let i = 0; i < Math.min(list.length, maxShown); i++) shown.add(list[i].id)
 
-      for (const e of entries.values()) if (!shown.has(e.id)) e.view.root.visible = e.plate.visible = false
+      for (const e of entries.values()) {
+        if (shown.has(e.id)) continue
+        e.view.root.visible = e.plate.visible = false
+        e.rocket.hideTrails()
+        e.rocketOn = false
+      }
       for (let i = 0; i < Math.min(list.length, maxShown); i++) {
         const { id, p, d } = list[i]
         let e = entries.get(id)
@@ -198,6 +210,14 @@ export function createRemotes({ scene, fx, preset }) {
         e.view.setNight(night)
         sync(e, p, dt)
         e.view.update(dt, camera, elapsed, e.boosted)
+        // Rocket boost / FLY: flames always, smoke + trails thin out with distance, the ignition shockwave carries far.
+        const lod = d < ROCKET_FULL ? 1 : d < FX_RANGE ? 0.5 : 0
+        if (e.rocketNow && !e.rocketOn && !e.fresh) {
+          if (d < ROCKET_SHOCK) e.rocket.ignite(lod)
+          if (d < HORN_RANGE) sfx.rocket?.()
+        }
+        e.rocketOn = e.rocketNow
+        e.rocket.update(dt, elapsed, { burning: e.rocketNow, flying: e.flying, groundY: 0, lod })
         const r = e.st.renderPosition
         e.plate.position.set(r.x, r.y + 3.1, r.z)
         e.plate.visible = d < 90

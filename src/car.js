@@ -2,7 +2,7 @@ import { AdditiveBlending, BufferAttribute, BufferGeometry, Color, DoubleSide, D
 import { inputState } from './input.js'
 import { RAPIER, alpha, onTick, world } from './physics.js'
 import { CAR, DRIVER_SEAT, PHYSICS, SPAWN, SPAWN_FACING } from './config.js'
-import { buildCar } from './carmodel.js'
+import { addHoverDiscs, buildCar, foldWheels } from './carmodel.js'
 import { setNeonLevel } from './propkit.js'
 import { createDriver } from './driver.js'
 
@@ -411,6 +411,18 @@ export function createCarView(scene, fx, preset, st = car, opts = {}) {
   const trails = !opts.remote && preset.particles >= 0.5 ? [makeTrail(scene), makeTrail(scene)] : []
   let jetHeat = 0
   let jetT = 0
+  let rocketT = 0
+  let kicked = false
+  // Flying cars (CARS `fly`): on spawn / equip the wheels fold flat into thruster discs (fold
+  // 0 -> 1, a takeoff burst half way) and the car hovers, climbing with speed. Visual only: the
+  // physics capsule stays on the road.
+  let fold = 0
+  let hover = 0
+  let tookOff = false
+  let flyT = 0
+  let rippleT = 0
+  let sonicT = 0
+  let discs = []
 
   function setCar(d) {
     if (parts) root.remove(parts.root)
@@ -430,6 +442,12 @@ export function createCarView(scene, fx, preset, st = car, opts = {}) {
       tr.setColor(parts.accent)
       tr.clear()
     }
+    // A glowing thruster disc on each wheel's inner face: it faces the road once the wheel folds.
+    fold = 0
+    hover = 0
+    tookOff = false
+    discs = []
+    if (d.fly) discs = addHoverDiscs(parts)
   }
 
   let pitch = 0
@@ -475,10 +493,24 @@ export function createCarView(scene, fx, preset, st = car, opts = {}) {
       parts.body.rotation.set(pitch, 0, roll)
       parts.body.position.y = rumble + (st.pad ? 0.02 : 0)
 
+      // Flying: wheels fold flat, the car lifts (higher with speed), bobs, noses down and banks hard.
+      if (def.fly) {
+        fold = Math.min(1, fold + dt * 0.7)
+        const f = fold * fold * (3 - 2 * fold)
+        const sp = Math.abs(st.wheelSpeed) / st.topSpeed
+        hover += ((0.55 + sp * 0.75) * f - hover) * Math.min(1, dt * 2.5)
+        const bob = Math.sin(elapsed * 2.1) * 0.07 * f
+        root.position.y = p.y + hover + bob
+        parts.body.rotation.set(pitch - sp * 0.06 * f, 0, roll * (1 + f * 2.2))
+        foldWheels(parts, f)
+        for (const g of discs) g.scale.setScalar(Math.max(0.001, f) * (1 + Math.sin(elapsed * 14) * 0.05))
+        parts.under.position.y = 0.04 - hover - bob // the glow stays on the road
+      }
+
       // Wheels.
       for (const w of parts.wheels) {
         w.spin.rotation.x += (st.wheelSpeed * dt) / parts.dims.wheelR
-        if (w.front) w.pivot.rotation.y = -st.steerAngle
+        if (w.front) w.pivot.rotation.y = -st.steerAngle * (def.fly ? 1 - fold : 1)
       }
       if (parts.steering) parts.steering.spin.rotation.z = st.steerAngle * DRIVER_SEAT.wheelTurn
       setNeonLevel(parts.dashMat, 1.6 + night * 2.4)
@@ -504,7 +536,7 @@ export function createCarView(scene, fx, preset, st = car, opts = {}) {
       const yaw = st.renderYaw
       const sin = Math.sin(yaw)
       const cos = Math.cos(yaw)
-      const toWorld = (lx, ly, lz) => tmp.set(p.x + lx * cos + lz * sin, p.y + ly, p.z - lx * sin + lz * cos)
+      const toWorld = (lx, ly, lz) => tmp.set(p.x + lx * cos + lz * sin, root.position.y + ly, p.z - lx * sin + lz * cos) // root: a flying car hovers
       const busy = Math.abs(st.wheelSpeed) / st.topSpeed
 
       // Jets (performance kit): the afterburner grows with the throttle (full on a treadmill,
@@ -530,6 +562,79 @@ export function createCarView(scene, fx, preset, st = car, opts = {}) {
           }
         }
       } else if (jetLight) jetLight.intensity = 0
+
+      // Rocket Edition (gifted cars, game.carLook): a rocket exhaust on top of the jets -- a long
+      // fire trail and smoke with the throttle, gold glitter, a pilot flicker parked, and a kick
+      // (ring + spark burst) when launching hard from a crawl.
+      if (def.rocket && jetting) {
+        const thr = Math.max(0, st.throttle)
+        rocketT -= dt
+        if (rocketT <= 0) {
+          rocketT = thr > 0.1 ? 0.03 : 0.12
+          for (const j of parts.jets) {
+            toWorld(j.x, j.y, j.z - 0.3)
+            const back = 4 + thr * 10
+            const jit = () => (Math.random() - 0.5) * 1.2
+            if (thr > 0.1) {
+              fx.glow({ x: tmp.x, y: tmp.y, z: tmp.z, vx: st.velocity.x * 0.5 - sin * back + jit(), vy: jit() * 0.5, vz: st.velocity.z * 0.5 - cos * back + jit(), life: 0.35 + Math.random() * 0.25, size: j.r * 7, sizeEnd: j.r * 2, color: Math.random() < 0.5 ? '#ffb31a' : Math.random() < 0.5 ? '#ff5a0a' : '#fff6d0', drag: 2.5 })
+              fx.smoke({ x: tmp.x, y: tmp.y, z: tmp.z, vx: -sin * back * 0.4 + jit(), vy: 0.6 + Math.random() * 0.6, vz: -cos * back * 0.4 + jit(), life: 1.3, size: 0.4, sizeEnd: 2.4, color: '#8a8f9e', alpha: 0.12 + thr * 0.12, drag: 1.4 })
+            } else fx.glow({ x: tmp.x, y: tmp.y, z: tmp.z, vx: -sin * 1.5, vy: 0.4, vz: -cos * 1.5, life: 0.25, size: j.r * 3, sizeEnd: 0.05, color: '#ffb31a', drag: 3 })
+            // Glitter in the car's accent colour, drifting up out of the trail.
+            if (Math.random() < (thr > 0.1 ? 0.6 : 0.25)) fx.glow({ x: tmp.x + jit(), y: tmp.y + 0.2, z: tmp.z + jit(), vx: -sin * back * 0.3, vy: 1 + Math.random() * 2, vz: -cos * back * 0.3, life: 0.9, size: 0.28, sizeEnd: 0.02, color: Math.random() < 0.5 ? parts.accent : '#ffffff', drag: 1, gravity: 1.5 })
+          }
+        }
+        // Launch kick.
+        if (thr > 0.8 && Math.abs(st.speed) < 3 && !kicked && !st.pad) {
+          kicked = true
+          const j = parts.jets[0]
+          toWorld(0, j.y, j.z - 0.5)
+          fx.ring(tmp.x, tmp.y, tmp.z, '#ffb31a', 3.5, 0.45, false)
+          fx.sparks(tmp.x, tmp.y, tmp.z, 40, ['#ffd21a', '#ff5a0a', '#ffffff', parts.accent], 9, 0.6, 0.45, -6)
+        } else if (thr < 0.2 || Math.abs(st.speed) > 6) kicked = thr > 0.8
+      }
+
+      // Flying: thruster plumes down from each disc, anti-gravity ripples on the road, a gold
+      // sparkle trail that hangs in the air, sonic rings near top speed, and a takeoff burst.
+      if (def.fly && fold > 0.05) {
+        if (!tookOff && fold > 0.5) {
+          tookOff = true
+          fx.ring(p.x, p.y + 0.08, p.z, '#ffd21a', 9, 0.8, true)
+          fx.ring(p.x, p.y + 0.08, p.z, parts.accent, 5, 0.55, true)
+          fx.sparks(p.x, p.y + 0.4, p.z, 90, ['#ffd21a', '#ffffff', parts.accent], 10, 0.8, 0.5, -4)
+          for (let i = 0; i < 24; i++) {
+            const a = (i / 24) * Math.PI * 2
+            fx.smoke({ x: p.x + Math.cos(a), y: p.y + 0.2, z: p.z + Math.sin(a), vx: Math.cos(a) * 7, vy: 0.3, vz: Math.sin(a) * 7, life: 1.1, size: 0.6, sizeEnd: 2.4, color: '#e8e2cc', alpha: 0.25, drag: 2.2 })
+          }
+        }
+        const sp = busy
+        flyT -= dt
+        if (flyT <= 0) {
+          flyT = 0.04
+          const jit = () => (Math.random() - 0.5) * 0.6
+          for (const w of parts.wheels) {
+            const wp = w.pivot.position
+            toWorld(wp.x, wp.y - 0.12, wp.z)
+            fx.glow({ x: tmp.x, y: tmp.y, z: tmp.z, vx: st.velocity.x * 0.4 + jit(), vy: -4 - Math.random() * 3, vz: st.velocity.z * 0.4 + jit(), life: 0.28, size: 0.6 * fold, sizeEnd: 0.08, color: Math.random() < 0.55 ? parts.accent : '#ffffff', drag: 3 })
+          }
+          // Sparkle trail off the tail, left hanging where the car was.
+          for (let i = 0; i < 1 + Math.round(sp * 3); i++) {
+            toWorld((Math.random() - 0.5) * parts.dims.width, 0.4 + Math.random() * 0.6, parts.dims.back + Math.random() * 0.5)
+            fx.glow({ x: tmp.x, y: tmp.y, z: tmp.z, vx: (Math.random() - 0.5) * 0.6, vy: 0.2 + Math.random() * 0.5, vz: (Math.random() - 0.5) * 0.6, life: 1.1 + Math.random() * 0.6, size: 0.32, sizeEnd: 0.02, color: Math.random() < 0.45 ? '#ffd21a' : Math.random() < 0.5 ? '#ffffff' : parts.accent, drag: 0.8, gravity: 0 })
+          }
+        }
+        rippleT -= dt
+        if (rippleT <= 0) {
+          rippleT = 0.75 - sp * 0.35
+          fx.ring(p.x, p.y + 0.06, p.z, sp > 0.5 ? '#ffd21a' : parts.accent, 2.6 + hover * 2, 0.6, true)
+        }
+        sonicT -= dt
+        if (sp > 0.85 && sonicT <= 0) {
+          sonicT = 1.1
+          toWorld(0, 0.6, parts.dims.back - 0.8)
+          fx.ring(tmp.x, tmp.y, tmp.z, '#fff6d0', 4.5, 0.5, false)
+          fx.sparks(tmp.x, tmp.y, tmp.z, 24, ['#ffffff', '#ffd21a'], 6, 0.5, 0.3, 0)
+        }
+      }
 
       // Light trails from the tail lamps (kit 2+), above ~45% of top speed.
       const trailOn = parts.kit >= 2 && Math.abs(st.speed) > st.topSpeed * 0.45
@@ -557,7 +662,7 @@ export function createCarView(scene, fx, preset, st = car, opts = {}) {
       // Tyre smoke: drifting, burnouts on a treadmill, hard launches.
       tyreT -= dt
       const burn = st.pad && st.throttle > 0.1
-      if ((st.drifting || burn || (st.throttle > 0.5 && Math.abs(st.speed) < 4 && busy > 0.1)) && tyreT <= 0) {
+      if (!(def.fly && fold > 0.5) && (st.drifting || burn || (st.throttle > 0.5 && Math.abs(st.speed) < 4 && busy > 0.1)) && tyreT <= 0) {
         tyreT = burn ? 0.08 : 0.03
         for (const w of parts.wheels) {
           if (w.front && !st.drifting) continue

@@ -189,6 +189,13 @@ export const sfx = {
     noise(0.8, { freq: 600, q: 0.5, gain: 0.3 })
     tone(200, 0.8, { type: 'sawtooth', gain: 0.06, slide: 4 })
   },
+  // Rocket boost ignition: a low roar that sweeps up, a hiss and a thump.
+  rocket() {
+    noise(1.6, { freq: 700, q: 0.4, gain: 0.5, type: 'lowpass' })
+    noise(0.9, { freq: 2600, q: 0.8, gain: 0.22 })
+    tone(70, 1.4, { type: 'sawtooth', gain: 0.1, slide: 3.2 })
+    tone(55, 0.3, { type: 'sine', gain: 0.35, slide: 0.5 })
+  },
   buy() {
     ;[660, 990].forEach((f, i) => tone(f, 0.15, { type: 'triangle', gain: 0.14, delay: i * 0.08 }))
   },

@@ -64,6 +64,9 @@ export function createPanels(actions, icons) {
     })
     buy.append(buyText)
     card.append(name, olText(`x${def.mult} Power`, 'cs-mult'), pic, olText(`Top speed ${(def.speed * 3.6) | 0} km/h`, 'cs-speed'), buy)
+    // Legendary cars (CARS `legend`): a gold card shown first in the strip (CSS order, so the card
+    // list keeps CARS' order for shopview.js, which adds the badge, sweep and live picture).
+    if (def.legend) card.classList.add('cs-legend')
     strip.append(card)
     return { def, card, name, pic, buy, buyText }
   })

@@ -3,6 +3,7 @@ import {
   BoxGeometry,
   BufferGeometry,
   CanvasTexture,
+  CircleGeometry,
   Color,
   ConeGeometry,
   CylinderGeometry,
@@ -96,7 +97,39 @@ const TYPES = {
     plateR: { v: 0.56 },
     spoiler: 'bigwing', sideIntake: true, fins: true, flares: 'paint', spokes: 'turbine', rim: '#18191e', caliper: '#ffd21a', seats: 'two', rearMesh: true,
   },
+  // Smooth electric roadster: one soft curve from a low grille-less nose over a long bonnet, a
+  // glass-roofed cabin set back, rounded haunches and a short tail with a thin light bar. No
+  // exhausts: rocket thrusters hide under the tail and under the floor (`thrusters`, buildCar).
+  roadster: {
+    width: 1.96, wheelR: 0.36, tyreW: 0.3, rearAxle: -1.32, frontAxle: 1.36, bottom: 0.2, round: 0.42, endK: 0.3, hips: 0.08,
+    body: [[2.1, 0.2], [2.2, 0.33], [2.18, 0.5], [1.95, 0.66], [1.4, 0.8], [0.75, 0.86], [-1.1, 0.94], [-1.85, 0.93], [-2.15, 0.82], [-2.22, 0.55], [-2.18, 0.32], [-2.08, 0.2]],
+    cabin: [[0.75, 0.84], [-0.15, 1.2], [-0.85, 1.22], [-1.75, 0.93]],
+    cabinW: 0.8,
+    head: { v: 0.6, w: 0.44, h: 0.07, x: 0.62, style: 'slim' },
+    intake: { v: 0.3, w: 1.1, h: 0.07 },
+    tail: { v: 0.76, w: 1.62, h: 0.045, style: 'bar' },
+    exhaust: null,
+    plateR: { v: 0.52 },
+    flares: 'paint', spokes: 'turbine', rim: '#1c1e24', caliper: '#c9ced8', seats: 'two',
+  },
+  // Angular wedge hypercar: one near-straight line from a knife-edge nose over the windshield,
+  // sharp creases (small `round`), hexagonal arches (`hexArch`), slit headlamps with Y-shaped
+  // DRLs on the bonnet slope, Y tail lamps, big angular side intakes.
+  wedge: {
+    width: 2.1, wheelR: 0.39, tyreW: 0.35, rearAxle: -1.5, frontAxle: 1.45, bottom: 0.16, round: 0.08, endK: 0.13, hips: 0.09,
+    body: [[2.46, 0.16], [2.56, 0.28], [2.52, 0.4], [2.0, 0.8], [1.0, 1.0], [-1.2, 1.02], [-2.3, 0.99], [-2.45, 0.92], [-2.49, 0.6], [-2.46, 0.27], [-2.36, 0.16]],
+    cabin: [[0.9, 0.95], [-0.3, 1.21], [-1.0, 1.22], [-2.0, 0.99]],
+    cabinW: 0.74, deck: 5,
+    head: { v: 0.56, w: 0.52, h: 0.06, x: 0.7, style: 'blade' },
+    intake: { v: 0.25, w: 1.8, h: 0.13 },
+    tail: { v: 0.8, w: 1.95, h: 0.05, style: 'ybar' },
+    exhaust: { v: 0.44, xs: [-0.13, 0.13], r: 0.09 },
+    plateR: { v: 0.5 },
+    spoiler: 'bigwing', sideIntake: 'big', fins: true, hexArch: true, flares: 'paint', spokes: 'turbine', rim: '#16171c', caliper: '#ffd21a', seats: 'two', rearMesh: true,
+  },
 }
+// Hexagonal arch corners (relative to the axle at u = 0, the arch centre height at v = 0) for radius R.
+const hexArch = (R) => [[-R, 0], [-R * 0.56, R * 0.92], [R * 0.56, R * 0.92], [R, 0]]
 
 const BEVEL = 0.06
 // Level of detail for the car being built: parked (static) cars use fewer segments.
@@ -202,7 +235,7 @@ const FLAME_FRAG = /* glsl */ `
     vec3 col = mix(uCool, uHot, smoothstep(0.55, 1.0, t)) * uGain;
     gl_FragColor = vec4(col, a);
   }`
-function makeFlame(r, hot, cool) {
+export function makeFlame(r, hot, cool) {
   const shared = { uTime: { value: 0 }, uPower: { value: 0.75 } }
   const g = new Group()
   for (const [rad, len, a, b, gain] of [[r, 1, hot, cool, 1.25], [r * 0.45, 0.5, '#ffffff', hot, 1.5]]) {
@@ -314,7 +347,8 @@ function bodyShape(t, cut = null) {
   for (const ax of [t.rearAxle, t.frontAxle]) {
     s.lineTo(ax - R, b)
     s.lineTo(ax - R, cy)
-    s.absarc(ax, cy, R, Math.PI, 0, true)
+    if (t.hexArch) for (const [du, dv] of hexArch(R).slice(1)) s.lineTo(ax + du, cy + dv)
+    else s.absarc(ax, cy, R, Math.PI, 0, true)
     s.lineTo(ax + R, b)
   }
   const run = [[t.frontAxle + R, b], ...t.body]
@@ -663,7 +697,12 @@ export function buildCar(def, opts = {}) {
   const sideX = (y, z) => half * sculpt(y, z)
   const T = textures()
 
-  const paint = new MeshPhysicalMaterial({ color: def.color, metalness: 0.4, roughness: 0.28, clearcoat: 1, clearcoatRoughness: 0.05 })
+  const paint =
+    def.paint === 'gold'
+      ? new MeshPhysicalMaterial({ color: '#e89200', metalness: 0.5, roughness: 0.24, clearcoat: 1, clearcoatRoughness: 0.03, emissive: '#4a1e00', emissiveIntensity: 0.3 })
+      : def.paint === 'silver' // liquid metal: the sky and street show in it
+        ? new MeshPhysicalMaterial({ color: '#c9ced8', metalness: 0.92, roughness: 0.16, clearcoat: 1, clearcoatRoughness: 0.03, envMapIntensity: 1.4 })
+        : new MeshPhysicalMaterial({ color: def.color, metalness: 0.4, roughness: 0.28, clearcoat: 1, clearcoatRoughness: 0.05 })
   const rimMat = cachedMat(`rim${t.rim}`, () => new MeshStandardMaterial({ color: t.rim, roughness: 0.28, metalness: 0.85 }))
   const caliperMat = t.caliper ? cachedMat(`cal${t.caliper}`, () => new MeshStandardMaterial({ color: t.caliper, roughness: 0.35, metalness: 0.2 })) : null
   const tailMat = opts.lights ? neon('#ff1a2a', 2.2) : (sharedTail ??= neon('#ff1a2a', 2.2))
@@ -847,6 +886,16 @@ export function buildCar(def, opts = {}) {
     } else if (h.style === 'slim') {
       onFace(body, t, h.v, true, rbox(h.w - 0.03, h.h - 0.03, 0.1, 0.02), M.head, x, 0.022)
       onFace(body, t, h.v - h.h * 0.62, true, rbox(h.w * 0.9, 0.022, 0.1, 0.008), M.drl, x, 0.02)
+    } else if (h.style === 'blade') {
+      // Slit lamp in a dark wedge-shaped pod, with a Y of light at its outer end.
+      const pod = onFace(body, t, h.v, true, rbox(h.w + 0.1, h.h + 0.09, 0.1, 0.02), M.trim, x, 0.014)
+      pod.rotation.z = s * 0.1
+      onFace(body, t, h.v, true, rbox(h.w * 0.7, h.h * 0.55, 0.1, 0.01), M.head, x - s * h.w * 0.12, 0.024)
+      onFace(body, t, h.v - h.h * 0.62, true, rbox(h.w * 0.62, 0.016, 0.1, 0.006), M.drl, x - s * h.w * 0.12, 0.026)
+      for (const k of [-1, 1]) {
+        const arm = onFace(body, t, h.v + k * h.h * 0.32, true, rbox(0.15, 0.016, 0.1, 0.006), M.drl, x + s * h.w * 0.36, 0.026)
+        arm.rotation.z = s * k * 0.62
+      }
     } else {
       onFace(body, t, h.v, true, rbox(h.w - 0.02, h.h - 0.025, 0.1, 0.015), M.head, x, 0.022)
       // LED arrow DRL above.
@@ -897,13 +946,23 @@ export function buildCar(def, opts = {}) {
   // --- Rear: tail lamps, reverse lamps, rear mesh, exhausts, diffuser ---
   const tl = t.tail
   const tailPos = []
-  if (tl.style === 'bar') {
+  if (tl.style === 'bar' || tl.style === 'ybar') {
     const f = faceAt(t, tl.v, false)
     const bw = Math.min(tl.w, sideX(tl.v, f.u) * 2 - 0.12)
     onFace(body, t, tl.v, false, rbox(bw + 0.04, tl.h + 0.05, 0.1, 0.02), M.trim, 0, 0.012)
     onFace(body, t, tl.v, false, rbox(bw, tl.h, 0.1, 0.02), tailMat, 0, 0.022)
     for (const s of [-1, 1]) {
-      onFace(body, t, tl.v - 0.06, false, rbox(0.3, tl.h * 2.2, 0.1, 0.02), tailMat, s * (bw / 2 - 0.16), 0.02)
+      if (tl.style === 'ybar') {
+        // Y-shaped lamps at the corners: a dark pod with three arms of light.
+        onFace(body, t, tl.v - 0.04, false, rbox(0.42, 0.24, 0.1, 0.03), M.trim, s * (bw / 2 - 0.2), 0.016)
+        const cx = s * (bw / 2 - 0.2)
+        const stem = onFace(body, t, tl.v - 0.1, false, rbox(0.035, 0.12, 0.1, 0.01), tailMat, cx, 0.026)
+        stem.rotation.z = 0
+        for (const k of [-1, 1]) {
+          const arm = onFace(body, t, tl.v + 0.0, false, rbox(0.2, 0.035, 0.1, 0.01), tailMat, cx + k * 0.08, 0.026)
+          arm.rotation.z = k * 0.6
+        }
+      } else onFace(body, t, tl.v - 0.06, false, rbox(0.3, tl.h * 2.2, 0.1, 0.02), tailMat, s * (bw / 2 - 0.16), 0.02)
       tailPos.push([s * (bw / 2 - 0.16), tl.v, f.u - BEVEL - 0.12])
     }
     if (t.rearMesh && !kit) onFace(body, t, tl.v - 0.2, false, rbox(bw * 0.62, 0.2, 0.1, 0.03), gridMat, 0, 0.012)
@@ -926,7 +985,7 @@ export function buildCar(def, opts = {}) {
   if (kit) {
     // Twin jet nozzles set into a carbon panel in the tail, in place of the exhausts.
     const r = [0, 0.15, 0.175, 0.2][kit]
-    const jy = Math.max(t.exhaust.v, t.bottom + r + 0.14)
+    const jy = Math.max(t.exhaust?.v ?? 0.45, t.bottom + r + 0.14)
     const fj = faceAt(t, jy, false)
     const jx = Math.min(0.52, sideX(jy, fj.u) - r - 0.2)
     onFace(body, t, jy, false, rbox(2 * (jx + r) + 0.16, 2 * r + 0.14, 0.1, 0.07), aero, 0, 0.012)
@@ -978,7 +1037,7 @@ export function buildCar(def, opts = {}) {
       jets.push({ x, y: jy, z: exitZ, r, flame })
       exhaustTips.push({ x, y: jy, z: exitZ - 0.08 })
     }
-  } else {
+  } else if (t.exhaust) {
     const ex = t.exhaust
     const fe = faceAt(t, ex.v, false)
     const pipe = new CylinderGeometry(ex.r, ex.r * 0.92, 0.26, 18, 1, true)
@@ -996,6 +1055,47 @@ export function buildCar(def, opts = {}) {
       exhaustTips.push({ x, y: ex.v, z: z - 0.16 })
     }
   }
+  // --- Rocket thrusters (config CARS `thrusters`): rocket.js lights them. ---
+  // rear: twin nozzles tucked under the tail (kit cars boost through their jets instead);
+  // down: four hover nozzles under the floor, inboard of the wheels, for FLY. Each has a dark
+  // ring, a glowing core and (on a driven car) a hidden makeFlame that rocket.js shows and sizes.
+  const thrusters = { rear: [], down: [] }
+  if (def.thrusters) {
+    const ringGeo = new TorusGeometry(1, 0.22, seg(8, 4), seg(20, 10))
+    const coreGeo = new CylinderGeometry(0.8, 0.8, 0.02, seg(16, 8))
+    coreGeo.rotateX(Math.PI / 2)
+    const coreMat = cachedMat('thrustCore', () => neon('#9fe6ff', 2.6))
+    const nozzle = (x, y, z, r, down) => {
+      const g = new Group()
+      g.position.set(x, y, z)
+      if (down) g.rotation.x = Math.PI / 2 // faces the road
+      const ring = new Mesh(ringGeo, M.jet)
+      ring.scale.setScalar(r)
+      const core = new Mesh(coreGeo, coreMat)
+      core.scale.setScalar(r)
+      core.position.z = down ? -0.03 : 0.03 // recessed into the body
+      g.add(ring, core)
+      body.add(g)
+      let flame = null
+      if (!opts.static) {
+        flame = makeFlame(r * 0.85, '#ffffff', '#5fd0ff')
+        flame.position.set(x, y + (down ? -0.02 : 0), z - (down ? 0 : 0.02))
+        if (down) flame.rotation.x = -Math.PI / 2 // the plume points at the road
+        flame.visible = false
+        body.add(flame)
+      }
+      return { x, y, z, r, flame }
+    }
+    if (!jets.length) {
+      const fr = faceAt(t, 0.38, false)
+      for (const sx of [-0.27, 0.27]) thrusters.rear.push(nozzle(sx, 0.37, fr.u - BEVEL - 0.01, 0.075, false))
+    }
+    const dx = half - t.tyreW - 0.22
+    for (const z of [t.frontAxle - t.wheelR - 0.3, t.rearAxle + t.wheelR + 0.3]) {
+      for (const s of [-1, 1]) thrusters.down.push(nozzle(s * dx, t.bottom - 0.005, z, 0.11, true))
+    }
+  }
+
   const rearU = t.body[t.body.length - 2][0]
   box(body, W * 0.78, 0.08, 0.34, aero, 0, t.bottom + 0.05, rearU + 0.1)
   if (t.fins) for (let i = -2; i <= 2; i++) box(body, 0.025, 0.2, 0.4, M.trim, i * 0.22, t.bottom + 0.12, rearU + 0.1)
@@ -1006,7 +1106,7 @@ export function buildCar(def, opts = {}) {
     // Splitter edge light + canards on the front corners.
     box(body, W * 0.8 * (1 - t.endK * 0.6) * 0.96, 0.014, 0.014, accentMat, 0, t.bottom + 0.035, frontU + 0.03)
     for (const s of [-1, 1]) {
-      const v = 0.42
+      const v = Math.min(0.42, t.body[2][1] - 0.05) // below the bonnet on a low wedge nose
       const f = faceAt(t, v, true)
       const can = box(body, 0.22, 0.025, 0.2, aero, s * (sideX(v, f.u - 0.15) - 0.02), v, f.u - 0.08, 0.008)
       can.rotation.set(0, s * 0.35, s * 0.18)
@@ -1021,12 +1121,30 @@ export function buildCar(def, opts = {}) {
   for (const ax of [t.rearAxle, t.frontAxle]) {
     // Dark wheel-well liner (upper half cylinder across the car).
     const wellW = 2 * sideX(cy + R * 0.6, ax) - 0.03
-    const well = new CylinderGeometry(R - 0.005, R - 0.005, wellW, seg(18, 8), 1, true, 0, Math.PI)
+    const wellR = (t.hexArch ? 1.08 * (R + BEVEL) : R) - 0.005 // a hex arch's corners reach past R
+    const well = new CylinderGeometry(wellR, wellR, wellW, seg(18, 8), 1, true, 0, Math.PI)
     well.rotateZ(Math.PI / 2)
     const wm = new Mesh(well, M.well)
     wm.position.set(0, cy, ax)
     body.add(wm)
     for (const s of [-1, 1]) {
+      if (t.hexArch) {
+        // Angular flares: a crisp lip along each edge of the hexagonal opening.
+        const pts = hexArch(R + 0.03)
+        for (let i = 0; i + 1 < pts.length; i++) {
+          const [u0, v0] = pts[i]
+          const [u1, v1] = pts[i + 1]
+          const len = Math.hypot(u1 - u0, v1 - v0)
+          const x = s * (sideX(cy + R * 0.7, ax) + 0.02)
+          const lip = box(body, 0.06, 0.08, len + 0.05, flareMat, x, cy + (v0 + v1) / 2, ax + (u0 + u1) / 2, 0.012)
+          lip.rotation.x = -Math.atan2(v1 - v0, u1 - u0)
+          if (kit) {
+            const glow = box(body, 0.012, 0.014, len * 0.8, accentMat, x + s * 0.036, cy + (v0 + v1) / 2, ax + (u0 + u1) / 2)
+            glow.rotation.x = lip.rotation.x
+          }
+        }
+        continue
+      }
       const a = new Mesh(archGeo, flareMat)
       a.position.set(s * (sideX(cy + R * 0.7, ax) + 0.015), cy, ax)
       a.castShadow = true
@@ -1051,7 +1169,19 @@ export function buildCar(def, opts = {}) {
     box(body, 0.18, 0.03, 0.06, M.trim, s * (cw / 2 + 0.06), beltY + 0.06, mz)
     box(body, 0.11, 0.14, 0.2, paint, s * (cw / 2 + 0.19), beltY + 0.11, mz - 0.02, 0.045)
     box(body, 0.09, 0.11, 0.01, M.glass, s * (cw / 2 + 0.19), beltY + 0.11, mz - 0.125)
-    if (t.sideIntake) {
+    if (t.sideIntake === 'big') {
+      // A big angular scoop ahead of the rear wheel: dark trapezoid frame, mesh, neon edge.
+      const z = t.rearAxle + t.wheelR + ARCH_GAP + 0.5
+      const x = s * (sideX(0.6, z) - 0.025) // half sunk into the flank
+      const frame = box(body, 0.1, 0.4, 0.86, aero, x, t.bottom + 0.44, z, 0.02)
+      frame.rotation.set(-0.32, s * 0.05, 0)
+      const mesh = box(body, 0.1, 0.3, 0.72, gridMat, x + s * 0.01, t.bottom + 0.44, z, 0.02)
+      mesh.rotation.copy(frame.rotation)
+      if (kit) {
+        const edge = box(body, 0.014, 0.014, 0.82, accentMat, x + s * 0.055, t.bottom + 0.64, z + 0.06)
+        edge.rotation.copy(frame.rotation)
+      }
+    } else if (t.sideIntake) {
       const z = t.rearAxle + t.wheelR + ARCH_GAP + 0.38
       const si = box(body, 0.1, 0.28, 0.62, gridMat, s * (sideX(0.55, z) + 0.01), t.bottom + 0.4, z, 0.04)
       si.rotation.y = s * 0.14
@@ -1188,11 +1318,13 @@ export function buildCar(def, opts = {}) {
     under,
     exhaustTips,
     jets,
+    thrusters,
     kit,
     accent,
     accentMat,
     glowColor,
     flameColor: flameCool,
+    flameHot,
     trailPoints: tailPos,
     paint,
     dashMat,
@@ -1203,3 +1335,26 @@ export function buildCar(def, opts = {}) {
 }
 
 export const carTypes = TYPES
+
+// Flying cars (CARS `fly`): a glowing thruster disc on each wheel's inner face, which faces the
+// road once the wheel is folded flat (foldWheels). Returns the disc groups (scale them 0..1).
+export function addHoverDiscs(parts) {
+  const r = parts.dims.wheelR
+  const ringMat = neon(parts.accent, 3.4)
+  const coreMat = new MeshBasicMaterial({ color: parts.accent, transparent: true, opacity: 0.55, blending: AdditiveBlending, depthWrite: false, side: DoubleSide, toneMapped: false })
+  const ringGeo = new TorusGeometry(r * 0.78, 0.05, 6, 28)
+  const coreGeo = new CircleGeometry(r * 0.66, 24)
+  return parts.wheels.map((w) => {
+    const g = new Group()
+    g.position.x = -w.side * 0.16
+    g.rotation.y = Math.PI / 2 // facing along the axle
+    g.add(new Mesh(ringGeo, ringMat), new Mesh(coreGeo, coreMat))
+    g.scale.setScalar(0.001)
+    w.pivot.add(g)
+    return g
+  })
+}
+// f = 0 (on the road) .. 1 (flat, outer face up).
+export function foldWheels(parts, f) {
+  for (const w of parts.wheels) w.pivot.rotation.z = (w.side * f * Math.PI) / 2
+}

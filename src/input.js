@@ -11,6 +11,7 @@ export const inputState = {
   sprint: false,
   jump: false, // edge: cleared by player.js
   brake: false, // handbrake held (Space / touch DRIFT)
+  spaceFly: false, // rocket.js: the car flies on Space (FLY), so Space is no handbrake
 }
 
 // One wheel notch per WheelEvent.deltaMode (pixels, lines, pages), so a trackpad
@@ -46,7 +47,7 @@ function recomputeMove() {
   inputState.move.x = Math.max(-1, Math.min(1, x + touch.x))
   inputState.move.z = Math.max(-1, Math.min(1, z + touch.z))
   inputState.sprint = held.has('ShiftLeft') || held.has('ShiftRight') || touch.sprint
-  inputState.brake = held.has('Space') || touch.brake
+  inputState.brake = (held.has('Space') && !inputState.spaceFly) || touch.brake
 }
 
 export function setTouchBrake(on) {

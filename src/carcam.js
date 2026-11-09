@@ -32,6 +32,11 @@ const fwd = new Vector3()
 export function setCameraSensitivity(v) {
   sensitivity = v
 }
+// Extra degrees of FOV on top of the speed widening (rocket.js punches it during a rocket boost).
+let fovKick = 0
+export function setFovKick(deg) {
+  fovKick = deg
+}
 export function shakeCamera(amount) {
   shake = Math.max(shake, amount)
 }
@@ -77,7 +82,7 @@ function updateCockpit(camera, dt, mouse, speedK) {
     look.yaw -= look.yaw * k
     look.pitch -= look.pitch * k
   }
-  setFov(camera, C.fov + C.speedFov * speedK * speedK, dt)
+  setFov(camera, C.fov + C.speedFov * speedK * speedK + fovKick * 0.6, dt)
   const yaw = car.renderYaw + look.yaw
   const pitch = C.pitch + look.pitch
   fwd.set(Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), Math.cos(yaw) * Math.cos(pitch))
@@ -146,7 +151,7 @@ export function updateCamera(camera, dt) {
   follow.z += (p.z - follow.z) * f
 
   state.dist += (state.zoom - state.dist) * (1 - Math.exp(-10 * dt))
-  setFov(camera, CAR_CAM.fov + CAR_CAM.speedFov * speedK * speedK, dt)
+  setFov(camera, CAR_CAM.fov + CAR_CAM.speedFov * speedK * speedK + fovKick, dt)
 
   let yaw = state.yaw
   let pitch = state.pitch

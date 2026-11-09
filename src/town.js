@@ -1,4 +1,7 @@
 import {
+  AdditiveBlending,
+  TorusGeometry,
+  OctahedronGeometry,
   BoxGeometry,
   CanvasTexture,
   Color,
@@ -16,15 +19,16 @@ import {
   ShaderMaterial,
   Shape,
   SRGBColorSpace,
+  Vector3,
 } from 'three'
 import { CARS, HOUSE_COLORS, TOWN, TRACK, TREADMILLS } from './config.js'
 import { brickBox, brickMat } from './world.js'
 import { bake } from './bake.js'
 import { fontReady, glow, label, neon, relabel, setNeonColor, setNeonLevel, solidBox } from './propkit.js'
-import { buildCar } from './carmodel.js'
+import { addHoverDiscs, buildCar, foldWheels, makeFlame } from './carmodel.js'
 import { mulberry32, toTexture } from './textures.js'
 import { paintBelt, paintDoor, paintWood } from './bricktex.js'
-import { chest as chestState, chestLeft, chestProgress, fmt, giftCar, giftLeft, giftProgress, state, treadmillUnlocked } from './game.js'
+import { carLook, chest as chestState, chestLeft, chestProgress, fmt, giftCar, giftLeft, giftProgress, state, treadmillUnlocked } from './game.js'
 
 // The plaza and everything standing in it:
 //   north  - the gate to the tape track (roll-up door, best-tape bar), the
@@ -246,9 +250,12 @@ export function buildTown(scene, lighting, fx, preset) {
   updaters.push(tm.update)
 
   // --- West: car showroom -----------------------------------------------------
-  const showroom = buildShowroom(dressing, live)
+  const showroom = buildShowroom(dressing, live, fx, preset)
   zones.push({ id: 'shop', x: -38, z: 0, r: 13, prompt: 'Car Shop' })
   updaters.push(showroom.update)
+  // Above it: the golden sky dais of the legendary flying car.
+  const dais = buildSkyDais(live, fx, preset)
+  updaters.push(dais.update)
 
   // --- South: leaderboards + portal --------------------------------------------
   const boards = buildLeaderboards(dressing, live)
@@ -272,6 +279,7 @@ export function buildTown(scene, lighting, fx, preset) {
     giftBurst: () => featured.burst(),
     refresh() {
       showroom.refresh()
+      dais.refresh()
       featured.refresh()
       tm.refresh()
       gate.refresh()
@@ -426,7 +434,8 @@ function buildChest(live, x, z, fx) {
 // --- Free Car podium: the next car above your best, free after a stretch of play -----------
 // (game.gift, counted by the server). A gold ring on the deck fills with the play clock, light beams
 // sweep the sky and sparkles in the car's colour rise faster as it fills; once ready the car lifts
-// off and spins over a gold fountain. burst() is the claim; the next car pops in after it.
+// off on rocket thrust and spins over a gold fountain. The car shown is its Rocket Edition (game.carLook:
+// jets + rocket exhaust once owned). burst() is the claim; the next car pops in after it.
 function buildGiftPodium(live, x, z, fx) {
   const g = new Group()
   g.position.set(x, 0, z)
@@ -468,24 +477,29 @@ function buildGiftPodium(live, x, z, fx) {
   const timer = sign(live, ' ', x, 5.2, z, 1.3, { color: '#ffffff' })
 
   let model = null
+  let shown = null // the podium car's parts (jets for the thrust)
   let shownId = null
   let color = '#ffd21a'
   let lastText = ''
   let sparkT = 0
   let popT = 1 // a new car scales in
   let flash = 0 // beams flare after a claim
+  let thrustT = 0
+  const back = new Vector3()
+  const jetAt = new Vector3()
   const white = new Color('#ffffff')
   const refresh = () => {
-    const def = giftCar() ?? CARS[CARS.length - 1]
+    const def = giftCar() ?? CARS.filter((c) => !c.legend).at(-1)
     if (def.id === shownId) return
     const first = shownId === null
     shownId = def.id
     if (model) turn.remove(model)
-    model = buildCar(def, { static: true }).root
+    shown = buildCar(carLook(def.id, true), { static: true })
+    model = shown.root
     turn.add(model)
     popT = first ? 1 : 0
     color = def.color
-    const paintName = () => relabel(name, def.name, 1.4, { color: new Color(def.color).lerp(white, 0.45).getStyle() })
+    const paintName = () => relabel(name, `${def.name} ROCKET`, 1.4, { color: new Color(def.color).lerp(white, 0.45).getStyle() })
     paintName()
     fontReady.then(paintName) // label()'s own font repaint would put the placeholder's size back
     for (const b of beams) b.mat.color.copy(new Color(def.color).lerp(white, 0.6))
@@ -546,6 +560,21 @@ function buildGiftPodium(live, x, z, fx) {
         b.pivot.rotation.z = -b.lean * (0.25 + Math.sin(t) * 0.2)
         b.pivot.rotation.x = Math.cos(t * 0.8) * 0.3
         b.mat.opacity = op
+      }
+
+      // Rocket thrust from the podium car's jets: a pilot flicker while counting, a full burn
+      // holding it up once it's ready.
+      thrustT -= dt
+      if (shown?.jets.length && thrustT <= 0) {
+        thrustT = ready ? 0.03 : 0.15
+        shown.root.updateWorldMatrix(true, false) // a static car is baked into root (body is not in the scene)
+        back.set(0, 0, -1).transformDirection(shown.root.matrixWorld)
+        for (const j of shown.jets) {
+          jetAt.set(j.x, j.y, j.z - 0.1).applyMatrix4(shown.root.matrixWorld)
+          const s = ready ? 7 : 1.5
+          fx.glow({ x: jetAt.x, y: jetAt.y, z: jetAt.z, vx: back.x * s + (Math.random() - 0.5), vy: back.y * s - (ready ? 3 : 0), vz: back.z * s + (Math.random() - 0.5), life: ready ? 0.45 : 0.25, size: ready ? 0.9 : 0.35, sizeEnd: 0.1, color: Math.random() < 0.5 ? '#ffb31a' : Math.random() < 0.5 ? '#ff5a0a' : '#fff6d0', drag: 2.5 })
+          if (ready && Math.random() < 0.4) fx.smoke({ x: jetAt.x, y: jetAt.y, z: jetAt.z, vx: back.x * 3, vy: -1, vz: back.z * 3, life: 1.2, size: 0.4, sizeEnd: 2, color: '#9aa0ae', alpha: 0.15, drag: 1.5 })
+        }
       }
 
       // Sparkles rising off the ring (more as it fills), a gold fountain when ready.
@@ -755,7 +784,7 @@ function treadmillIcon() {
 }
 
 // --- Showroom -------------------------------------------------------------------------
-function buildShowroom(dressing, live) {
+function buildShowroom(dressing, live, fx, preset) {
   const stone = brickMat('#7f88a6', 'plate')
   const tiers = [
     { x: -X + 19, top: 0.8, depth: 8 },
@@ -769,10 +798,11 @@ function buildShowroom(dressing, live) {
   }
   // Side walls of the stepped block.
   for (const s of [-1, 1]) add(dressing, brickBox(24, 5.4, 1, 4), brickMat('#6d7694', 'plate'), -X + 11, 2.7, s * (span / 2 + 0.5))
-  sign(live, 'Cars', -X + 6, 18, 0, 7, { color: '#ffffff' })
+  sign(live, 'Cars', -X + 6, 21, 0, 6, { color: '#ffffff' }) // above the golden sky dais (buildSkyDais)
 
   const podiums = []
-  CARS.forEach((def, i) => {
+  // Legendary cars fly round the golden sky dais instead (buildSkyDais).
+  CARS.filter((def) => !def.legend).forEach((def, i) => {
     const tier = tiers[Math.floor(i / 4)]
     const z = -15 + (i % 4) * 10
     const x = tier.x + 0.5
@@ -782,16 +812,33 @@ function buildShowroom(dressing, live) {
     add(g, new BoxGeometry(5.2, 0.3, 5.2), new MeshStandardMaterial({ color: '#242a3c', roughness: 0.5 }), 0, 0.15, 0)
     const rimMat = neon('#ff2424', 2.6)
     for (const [w, d, px, pz] of [[5.5, 0.3, 0, 2.6], [5.5, 0.3, 0, -2.6], [0.3, 5.5, 2.6, 0], [0.3, 5.5, -2.6, 0]]) add(g, new BoxGeometry(w, 0.36, d), rimMat, px, 0.18, pz, { cast: false })
-    const model = buildCar(def, { static: true }).root
-    model.position.set(x, y + 0.3, z)
-    model.rotation.y = Math.PI / 2 - 0.55
+    const built = buildCar(def, { static: true })
+    const model = built.root
     model.scale.setScalar(0.9)
-    dressing.add(model)
+    // Jet cars (kit) turn slowly on their podiums, afterburners revving, so the jets show from
+    // the plaza; on the Low preset they stand baked like the rest.
+    const spin = def.kit && fx && preset?.particles >= 0.5 ? new Group() : null
+    const flames = []
+    if (spin) {
+      spin.position.set(x, y + 0.3, z)
+      spin.add(model)
+      live.add(spin)
+      for (const j of built.jets) {
+        const f = makeFlame(j.r * 0.82, built.flameHot, built.flameColor)
+        f.position.set(j.x, j.y, j.z - 0.01)
+        model.add(f)
+        flames.push({ f, j })
+      }
+    } else {
+      model.position.set(x, y + 0.3, z)
+      model.rotation.y = Math.PI / 2 - 0.55
+      dressing.add(model)
+    }
     live.add(g)
     const lbl = label(`${def.cost ? fmt(def.cost) + ' Wins' : 'FREE'}\nx${def.mult} Power\n${def.name}`, 2.8, { colors: ['#ffd21a', '#7dff5a', '#ffffff'] })
     lbl.position.set(x, y + 4.2, z)
     live.add(lbl)
-    podiums.push({ def, rimMat, model })
+    podiums.push({ def, rimMat, model, spin, flames, accent: built.accent, flameColor: built.flameColor, x, y, z, phase: i * 1.7, burst: 0, burstT: 2 + i * 0.7, emitT: 0 })
   })
   const refresh = () => {
     for (const p of podiums) {
@@ -801,7 +848,199 @@ function buildShowroom(dressing, live) {
     }
   }
   refresh()
-  return { refresh, update() {} }
+  const spinners = podiums.filter((p) => p.spin)
+  const nozzle = new Vector3()
+  return {
+    refresh,
+    update(dt, elapsed, carPos) {
+      const near = carPos && Math.hypot(carPos.x - (-X + 11), carPos.z) < 70 // particles only when the player is around
+      for (const p of spinners) {
+        p.spin.rotation.y = elapsed * 0.32 + p.phase
+        p.burstT -= dt
+        if (p.burstT <= 0) {
+          p.burst = 1.4
+          p.burstT = 5 + Math.random() * 3
+        }
+        p.burst = Math.max(0, p.burst - dt)
+        const heat = p.burst > 0 ? Math.min(1, p.burst * 3) : 0.3 + 0.3 * Math.max(0, Math.sin(elapsed * 2 + p.phase)) ** 2
+        const flick = 0.9 + Math.random() * 0.2
+        for (const { f } of p.flames) f.userData.set(elapsed, 0.7 + heat * 0.9, (0.5 + heat * 2.8) * flick, 0.95 + heat * 0.4)
+        if (!near) continue
+        p.emitT -= dt
+        if (p.emitT > 0) continue
+        p.emitT = p.burst > 0 ? 0.03 : 0.08
+        p.spin.updateMatrixWorld(true)
+        const yaw = p.spin.rotation.y
+        const sx = -Math.sin(yaw)
+        const sz = -Math.cos(yaw)
+        for (const { j } of p.flames) {
+          p.model.localToWorld(nozzle.set(j.x, j.y, j.z - 0.3 - Math.random() * heat))
+          const out = 3 + heat * 10
+          fx.glow({ x: nozzle.x, y: nozzle.y, z: nozzle.z, vx: sx * out + (Math.random() - 0.5), vy: (Math.random() - 0.5) * 0.6, vz: sz * out + (Math.random() - 0.5), life: 0.3, size: j.r * (3 + heat * 5), sizeEnd: 0.05, color: Math.random() < 0.4 ? '#fff3c0' : p.flameColor, drag: 2.5 })
+        }
+        // Glitter in the car's accent colour rising off the podium.
+        const a = Math.random() * Math.PI * 2
+        fx.glow({ x: p.x + Math.cos(a) * 2.4, y: p.y + 0.4, z: p.z + Math.sin(a) * 2.4, vx: 0, vy: 1 + Math.random() * 1.5, vz: 0, life: 1.4, size: 0.35, sizeEnd: 0.03, color: Math.random() < 0.6 ? p.accent : '#ffffff', drag: 0.4, gravity: 0 })
+      }
+    },
+  }
+}
+
+// --- Golden sky dais: the legendary flying car (CARS `legend`) ------------------------------
+// A floating gold platform over the showroom with spinning halos and a pillar of light down to
+// the terraces; the car itself flies figure-eights round it, wheels folded into thruster discs,
+// banking through the turns and leaving a gold sparkle trail.
+function buildSkyDais(live, fx, preset) {
+  const def = CARS.find((c) => c.legend)
+  if (!def) return { refresh() {}, update() {} }
+  const C = { x: -X + 14, y: 9.5, z: 0 }
+  const gold = new MeshStandardMaterial({ color: '#ffab00', metalness: 0.6, roughness: 0.28, envMapIntensity: 0.55, emissive: '#7a4000', emissiveIntensity: 0.25 })
+  const g = new Group()
+  g.position.set(C.x, C.y, C.z)
+  live.add(g)
+  add(g, new CylinderGeometry(5, 4.4, 0.9, 8), gold, 0, 0, 0)
+  add(g, new CylinderGeometry(4.4, 0.5, 2.2, 8), gold, 0, -1.55, 0)
+  const topGlow = add(g, new CylinderGeometry(3.6, 3.6, 0.06, 8), neon('#ff9a00', 1.6), 0, 0.47, 0, { cast: false })
+  const rimMat = neon('#ffc21a', 2.4)
+  add(g, new TorusGeometry(4.75, 0.12, 6, 8), rimMat, 0, 0.48, 0, { cast: false }).rotation.x = Math.PI / 2
+  const crystal = add(g, new OctahedronGeometry(0.75), neon('#fff2b0', 4), 0, -3.1, 0, { cast: false })
+  for (let i = 0; i < 4; i++) {
+    const a = (i / 4) * Math.PI * 2 + Math.PI / 4
+    add(g, new BoxGeometry(0.5, 1.8, 0.5), gold, Math.cos(a) * 3.9, 1.35, Math.sin(a) * 3.9)
+    add(g, new OctahedronGeometry(0.35), neon('#fff2b0', 4), Math.cos(a) * 3.9, 2.55, Math.sin(a) * 3.9, { cast: false })
+  }
+  // Two halo rings turning on different axes.
+  const halos = [6.4, 7.2].map((r, i) => {
+    const h = new Mesh(new TorusGeometry(r, 0.09, 6, 64), neon(i ? '#ffb31a' : '#ffe27a', 2.2))
+    h.position.set(C.x, C.y + 1.2, C.z)
+    live.add(h)
+    return h
+  })
+  // Pillar of light from the terraces up to the crystal.
+  const pillarMat = new MeshBasicMaterial({ color: '#ffe9a0', transparent: true, opacity: 0.16, blending: AdditiveBlending, depthWrite: false, side: DoubleSide, toneMapped: false })
+  const pillarTop = C.y - 3.1
+  const pillar = new Mesh(new CylinderGeometry(0.8, 2.2, pillarTop - 3, 20, 1, true), pillarMat)
+  pillar.position.set(C.x, (pillarTop + 3) / 2, C.z)
+  pillar.renderOrder = 5
+  live.add(pillar)
+  const plaque = sign(live, ' ', C.x, C.y + 4.2, C.z, 3.3, { colors: ['#ffd21a', '#ffffff', '#7dff5a'] })
+
+  // The flying car: built live (not baked) so its wheels fold and its jets burn.
+  const parts = buildCar(def)
+  // A thruster car (the Tesla Roadster) flies on its own hover + rear thrusters, wheels down;
+  // any other legend folds its wheels into thruster discs.
+  const th = parts.thrusters?.down.length ? parts.thrusters : null
+  if (!th) foldWheels(parts, 1)
+  const discs = th ? [] : addHoverDiscs(parts)
+  for (const d of discs) d.scale.setScalar(1)
+  if (th) for (const n of [...th.down, ...th.rear]) n.flame && (n.flame.visible = true)
+  const flyer = new Group()
+  flyer.add(parts.root)
+  live.add(flyer)
+  const fxOn = !!fx && (preset?.particles ?? 1) >= 0.5
+  const pos = new Vector3()
+  const prev = new Vector3()
+  const tmpV = new Vector3()
+  let heading = 0
+  let bank = 0
+  let emitT = 0
+  let rippleT = 0
+  const path = (t, out) => out.set(C.x + 6 * Math.sin(2 * t), C.y + 3.5 + 2 * Math.sin(3 * t), C.z + 15 * Math.sin(t))
+  path(0, prev)
+
+  const refresh = () => {
+    const owned = state.owned.includes(def.id)
+    relabel(plaque, `LEGENDARY\n${def.name.toUpperCase()}\n${owned ? 'OWNED' : fmt(def.cost) + ' Wins'}`, 3.3, { colors: ['#ffd21a', '#ffffff', owned ? '#2affff' : '#7dff5a'] })
+  }
+  fontReady.then(refresh)
+  refresh()
+
+  return {
+    refresh,
+    update(dt, elapsed, carPos) {
+      g.position.y = C.y + Math.sin(elapsed * 0.9) * 0.25
+      g.rotation.y = elapsed * 0.15
+      crystal.rotation.y = elapsed * 1.6
+      halos[0].rotation.set(Math.PI / 2 + Math.sin(elapsed * 0.5) * 0.35, elapsed * 0.4, 0)
+      halos[1].rotation.set(Math.PI / 2 + Math.cos(elapsed * 0.4) * 0.4, -elapsed * 0.3, 0.3)
+      pillarMat.opacity = 0.12 + Math.sin(elapsed * 2.2) * 0.04
+      setNeonLevel(rimMat, 2.4 + Math.round(Math.sin(elapsed * 3) * 4) / 10)
+      void topGlow
+
+      // Fly the loop: face along the path, bank into the turn.
+      path(elapsed * 0.32, pos)
+      const dx = pos.x - prev.x
+      const dz = pos.z - prev.z
+      if (dx * dx + dz * dz > 1e-8) {
+        const h = Math.atan2(dx, dz)
+        let dh = h - heading
+        dh = Math.atan2(Math.sin(dh), Math.cos(dh))
+        heading += dh
+        bank += (Math.max(-0.7, Math.min(0.7, -(dh / Math.max(dt, 1e-3)) * 0.45)) - bank) * Math.min(1, dt * 3)
+      }
+      prev.copy(pos)
+      flyer.position.copy(pos)
+      flyer.rotation.set(0, heading, 0)
+      parts.body.rotation.set(-0.06, 0, bank)
+      for (const w of parts.wheels) w.spin.rotation.x += dt * 25
+      for (const d of discs) d.scale.setScalar(1 + Math.sin(elapsed * 14) * 0.06)
+      for (const j of parts.jets) j.flame?.userData.set(elapsed, 1.2, 1.6 + Math.random() * 0.5, 1.15)
+      if (th) {
+        for (const n of th.down) n.flame?.userData.set(elapsed, 1.3, 1.2 + Math.random() * 0.4, 1.5)
+        for (const n of th.rear) n.flame?.userData.set(elapsed, 1.6, 2 + Math.random() * 0.6, 1.3)
+      }
+
+      // Particles while the player is anywhere near the showroom.
+      if (!fxOn || !carPos || Math.hypot(carPos.x - C.x, carPos.z - C.z) > 110) return
+      flyer.updateMatrixWorld(true)
+      emitT -= dt
+      if (emitT <= 0) {
+        emitT = 0.04
+        if (th) {
+          // Blue-white sparks off the hover plumes, white smoke + red light streaks off the tail.
+          const bx = -Math.sin(heading)
+          const bz = -Math.cos(heading)
+          for (const n of th.down) {
+            parts.body.localToWorld(tmpV.set(n.x, n.y - 0.15, n.z))
+            fx.glow({ x: tmpV.x, y: tmpV.y, z: tmpV.z, vx: (Math.random() - 0.5) * 0.6, vy: -6 - Math.random() * 3, vz: (Math.random() - 0.5) * 0.6, life: 0.25, size: 0.5, sizeEnd: 0.06, color: Math.random() < 0.5 ? '#ffffff' : '#7fd8ff', drag: 2 })
+          }
+          for (const n of th.rear) {
+            parts.body.localToWorld(tmpV.set(n.x, n.y, n.z - 0.6))
+            fx.smoke({ x: tmpV.x, y: tmpV.y, z: tmpV.z, vx: bx * 2 + (Math.random() - 0.5), vy: 0.2, vz: bz * 2 + (Math.random() - 0.5), life: 2, size: 0.6, sizeEnd: 3.2, color: '#f4f6fa', alpha: 0.4, drag: 1.5 })
+          }
+          for (const tp of parts.trailPoints) {
+            parts.body.localToWorld(tmpV.set(tp[0], tp[1], tp[2]))
+            fx.glow({ x: tmpV.x, y: tmpV.y, z: tmpV.z, vx: bx * 2, vy: 0, vz: bz * 2, life: 0.9, size: 0.3, sizeEnd: 0.1, color: '#ff2a3a', drag: 0.4, gravity: 0 })
+          }
+        }
+        for (const w of th ? [] : parts.wheels) {
+          w.pivot.localToWorld(tmpV.set(-w.side * 0.2, 0, 0))
+          fx.glow({ x: tmpV.x, y: tmpV.y, z: tmpV.z, vx: (Math.random() - 0.5) * 0.6, vy: -4 - Math.random() * 2, vz: (Math.random() - 0.5) * 0.6, life: 0.3, size: 0.55, sizeEnd: 0.08, color: Math.random() < 0.55 ? parts.accent : '#ffffff', drag: 3 })
+        }
+        for (const j of parts.jets) {
+          parts.body.localToWorld(tmpV.set(j.x, j.y, j.z - 0.3))
+          const bx = -Math.sin(heading) * 6
+          const bz = -Math.cos(heading) * 6
+          fx.glow({ x: tmpV.x, y: tmpV.y, z: tmpV.z, vx: bx + (Math.random() - 0.5), vy: (Math.random() - 0.5) * 0.5, vz: bz + (Math.random() - 0.5), life: 0.3, size: 0.7, sizeEnd: 0.06, color: Math.random() < 0.5 ? '#fff3c0' : '#ffc21a', drag: 2.5 })
+        }
+        // The sparkle trail hangs in the air behind it.
+        for (let i = 0; i < 2; i++) {
+          parts.body.localToWorld(tmpV.set((Math.random() - 0.5) * parts.dims.width, 0.4 + Math.random() * 0.5, parts.dims.back + Math.random() * 0.4))
+          fx.glow({ x: tmpV.x, y: tmpV.y, z: tmpV.z, vx: (Math.random() - 0.5) * 0.4, vy: -0.2 - Math.random() * 0.4, vz: (Math.random() - 0.5) * 0.4, life: 1.6 + Math.random() * 0.8, size: 0.36, sizeEnd: 0.02, color: Math.random() < 0.5 ? '#ffd21a' : Math.random() < 0.5 ? '#ffffff' : '#fff2b0', drag: 0.6, gravity: 0 })
+        }
+        // Gold dust rising round the dais.
+        const a = Math.random() * Math.PI * 2
+        fx.glow({ x: C.x + Math.cos(a) * 4.6, y: g.position.y + 0.6, z: C.z + Math.sin(a) * 4.6, vx: 0, vy: 1 + Math.random() * 1.5, vz: 0, life: 1.5, size: 0.3, sizeEnd: 0.02, color: Math.random() < 0.6 ? '#ffd21a' : '#ffffff', drag: 0.4, gravity: 0 })
+      }
+      // A pulse of light runs down the pillar now and then.
+      rippleT -= dt
+      if (rippleT <= 0) {
+        rippleT = 1.6
+        fx.ring(C.x, g.position.y + 0.55, C.z, '#ffd21a', 7, 0.9, true)
+        fx.ring(C.x, 3.1, C.z, '#fff2b0', 4, 0.8, true) // at the foot of the pillar
+      }
+    },
+  }
 }
 
 // --- Leaderboards ---------------------------------------------------------------------

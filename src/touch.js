@@ -170,6 +170,25 @@ export function installTouch(actions) {
   drift.addEventListener('pointerup', hold(false))
   drift.addEventListener('pointercancel', hold(false))
   cluster.append(drift)
+  // BOOST (rocket.js): the cluster's free left slot; rocket.js paints its charge ring (.rk-charge).
+  if (actions.boost) cluster.append(button('sprint boost rk-charge', '🚀<br>BOOST', () => actions.boost()))
+  // FLY (rocket.js): held, above BOOST; shown only while driving a car that flies (body.rk-canfly).
+  if (actions.fly) {
+    const fly = el('button', 'touch-btn fly rk-fuel', 'FLY')
+    fly.type = 'button'
+    const flyHold = (on) => (e) => {
+      e.preventDefault()
+      e.stopPropagation()
+      actions.fly(on)
+    }
+    fly.addEventListener('pointerdown', (e) => {
+      capture(fly, e.pointerId)
+      flyHold(true)(e)
+    })
+    fly.addEventListener('pointerup', flyHold(false))
+    fly.addEventListener('pointercancel', flyHold(false))
+    cluster.append(fly)
+  }
   if (actions.horn) cluster.append(button('horn', 'HORN', () => actions.horn()))
   if (actions.view) cluster.append(button('mode', 'VIEW', (b) => b.classList.toggle('on', !!actions.view())))
 

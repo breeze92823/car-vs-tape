@@ -66,7 +66,10 @@ export function saveNow() {
 
 // --- Presence (relayed through the roster, drawn by remotes.js) ----------------------
 // Bits of the pose `flags` (backend WorldState): what the car is doing, for the others' lights, smoke and driver.
-export const POSE_FLAGS = { braking: 1, drifting: 2, handbrake: 4, pad: 8, boosted: 16, stunned: 32 }
+export const POSE_FLAGS = { braking: 1, drifting: 2, handbrake: 4, pad: 8, boosted: 16, stunned: 32, rocket: 64, flying: 128 }
+// main.js hands over the local rocket (Shift boost / FLY) so the others can draw its flames and smoke.
+const rocketState = { burning: false, flying: false }
+export const setRocketSource = (r) => Object.defineProperties(rocketState, { burning: { get: () => r.burning }, flying: { get: () => r.flying } })
 let sentPose = ''
 let sentLoadout = ''
 let sentAvatar = ''
@@ -80,7 +83,9 @@ function sendPose() {
     (car.handbrake ? POSE_FLAGS.handbrake : 0) |
     (car.pad ? POSE_FLAGS.pad : 0) |
     (game.boostLeft() > 0 ? POSE_FLAGS.boosted : 0) |
-    (car.stun > 0 ? POSE_FLAGS.stunned : 0)
+    (car.stun > 0 ? POSE_FLAGS.stunned : 0) |
+    (rocketState.burning ? POSE_FLAGS.rocket : 0) |
+    (rocketState.flying ? POSE_FLAGS.flying : 0)
   const key = JSON.stringify({ x: r(p.x), y: r(p.y), z: r(p.z), yaw: r(car.yaw), speed: r(car.wheelSpeed), steer: r(car.steer), thr: r(car.throttle), flags })
   if (key !== sentPose) send('pose', JSON.parse((sentPose = key)))
 }

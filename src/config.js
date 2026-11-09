@@ -447,11 +447,17 @@ export const CARS = [
   { id: 'comet', name: 'Comet', type: 'super', color: '#f4f4f8', cost: 90, mult: 5.5, speed: 33, kit: 1, accent: '#2ae8ff', flame: ['#d8f6ff', '#2ab8ff'] },
   { id: 'ember', name: 'Ember', type: 'super', color: '#ff6a00', cost: 250, mult: 9, speed: 34, kit: 1, accent: '#ffd21a' },
   { id: 'viper', name: 'Viper', type: 'super', color: '#22d84a', cost: 700, mult: 15, speed: 35, kit: 1, accent: '#c6ff2a', flame: ['#f0ffd0', '#4cff2a'] },
-  { id: 'sunstrike', name: 'Sunstrike', type: 'hyper', color: '#ffc81a', cost: 2000, mult: 26, speed: 37, kit: 2, accent: '#ff5a1a' },
-  { id: 'redline', name: 'Redline X', type: 'hyper', color: '#e3101e', cost: 6000, mult: 45, speed: 39, kit: 2, accent: '#ffffff', flame: ['#fff2d8', '#ff2a1a'] },
-  { id: 'frost', name: 'Frostbite', type: 'hyper', color: '#2a6bff', cost: 18000, mult: 80, speed: 41, kit: 2, accent: '#7df6ff', flame: ['#e8fdff', '#2a8bff'] },
-  { id: 'onyx', name: 'Onyx', type: 'hyper', color: '#16161c', cost: 55000, mult: 150, speed: 43, kit: 3, accent: '#2affe8', flame: ['#e0fffb', '#00d0ff'] },
-  { id: 'nebula', name: 'Nebula', type: 'hyper', color: '#a43bff', cost: 160000, mult: 300, speed: 46, kit: 3, accent: '#ff4fd8', flame: ['#ffe0ff', '#b03bff'] },
+  { id: 'sunstrike', name: 'Sunstrike', type: 'wedge', color: '#ffc81a', cost: 2000, mult: 26, speed: 37, kit: 2, accent: '#ff5a1a' },
+  { id: 'redline', name: 'Redline X', type: 'wedge', color: '#e3101e', cost: 6000, mult: 45, speed: 39, kit: 2, accent: '#ffffff', flame: ['#fff2d8', '#ff2a1a'] },
+  { id: 'frost', name: 'Frostbite', type: 'wedge', color: '#2a6bff', cost: 18000, mult: 80, speed: 41, kit: 2, accent: '#7df6ff', flame: ['#e8fdff', '#2a8bff'] },
+  { id: 'onyx', name: 'Onyx', type: 'wedge', color: '#16161c', cost: 55000, mult: 150, speed: 43, kit: 3, accent: '#2affe8', flame: ['#e0fffb', '#00d0ff'] },
+  { id: 'nebula', name: 'Nebula', type: 'wedge', color: '#a43bff', cost: 160000, mult: 300, speed: 46, kit: 3, accent: '#ff4fd8', flame: ['#ffe0ff', '#b03bff'] },
+  // Legendary (`legend`): the Tesla Roadster (id kept from the earlier Zenith, so saves stay valid).
+  // Never a Free Car gift; it flies laps round the golden sky dais over the showroom (town.js)
+  // instead of a showroom podium, gets the gold card first in the Car Shop and a legendary buy
+  // celebration. `thrusters`: hidden rocket thrusters (carmodel.js) for BOOST (red light trails,
+  // white smoke) and Space-to-FLY (rocket.js). `paint: 'silver'`: liquid-metal bodywork.
+  { id: 'zenith', name: 'Tesla Roadster', type: 'roadster', color: '#d9dee6', cost: 600000, mult: 650, speed: 50, thrusters: true, legend: true, paint: 'silver', accent: '#2ad8ff' },
 ]
 
 // House wall colours around the plaza.
@@ -472,10 +478,24 @@ export const REWARDED = { placement: 'boost' }
 // decides `needMs`; `minutes` is only what the client shows before the server answers. Reward: x2 power
 // for `boost` s (stacks with any boost running) + a Wins bag worth `winsShare` of the next car's price
 // (rebirth cost once every car is owned), at least `winsMin`.
+// Rocket boost (rocket.js): Shift, the BOOST touch button or a click on the boost dial fires it
+// when charged. For `duration` s the car is pushed `push` m/s^2 up to `over` x its top speed (plus an
+// instant `kick` m/s), then the extra speed bleeds off at `bleed` m/s^2; it recharges in `recharge` s.
+// Jet cars' afterburners roar out, other cars grow rocket flames from their exhausts; `fov` degrees
+// of camera punch.
+export const ROCKET = { duration: 1.8, recharge: 7, push: 30, kick: 6, over: 1.45, bleed: 9, fov: 10 }
+// FLY (rocket.js): cars with `thrusters` (the Tesla Roadster) lift off on four hover thrusters
+// while the key (Space: it is no handbrake on such a car) or the touch FLY button is held, holding `height` m over the ground,
+// for `fuel` s of flight; the tank refills in `recharge` s. Not on the tape track or a treadmill.
+export const FLIGHT = { key: 'Space', label: 'SPACE', height: 3.2, climb: 7, fuel: 4, recharge: 6, maxFall: 9 }
+
 export const PLAY_REWARD = { minutes: 60, boost: 15 * 60, winsShare: 0.3, winsMin: 5 }
 
 // Free Car podium (town.js, north plaza, where "next car" used to stand): a signed-in player gets the
 // next car above the best one they own, free, after a stretch of play. The server counts it and sets
 // the goal (backend playtime.ts carGiftMs: 30 min, +15 min per car already gifted, at most 2 h);
-// `minutes` is only shown before the server answers.
-export const CAR_GIFT = { minutes: 30 }
+// `minutes` is only shown before the server answers. `jump`: how many tiers above the best car owned
+// the gift is (capped at the top car). Gifted cars are a Rocket Edition (`rocket`): at least
+// performance kit `kit` (jets, neon, light trails) even on a hatch, the car's own accent or `accent`,
+// rocket-orange afterburners (`flame`) and a rocket exhaust of fire, smoke and glitter (car.js).
+export const CAR_GIFT = { minutes: 30, jump: 2, rocket: { kit: 2, accent: '#ffd21a', flame: ['#fff6d0', '#ff5a0a'] } }

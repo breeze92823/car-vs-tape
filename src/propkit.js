@@ -101,6 +101,8 @@ export function setNeonColor(m, color) {
 export function relabel(sprite, text, height, opts) {
   const t = paintText(text, opts)
   const tex = sprite.material.map
+  // A canvas of another size can't be uploaded into the old GPU texture (immutable storage).
+  if (tex.image && (tex.image.width !== t.canvas.width || tex.image.height !== t.canvas.height)) tex.dispose()
   tex.image = t.canvas
   tex.needsUpdate = true
   sprite.scale.set((height * t.canvas.width) / t.canvas.height, height, 1)

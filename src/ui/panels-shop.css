@@ -103,3 +103,34 @@
   font-size: calc(40 * var(--wu));
   --ow: 3;
 }
+
+/* Legendary card (CARS `legend`): gold and first in the strip. shopview.js adds the badge
+   ("LEGENDARY · FLYING"), the light sweep and the live picture; these rules outrank its .sv-kit ones. */
+.cs-strip .cs-card.cs-legend {
+  order: -1;
+  overflow: hidden;
+  background: linear-gradient(160deg, rgba(255, 214, 90, 0.42), rgba(120, 72, 0, 0.5) 55%, rgba(255, 200, 60, 0.38));
+  border: max(2px, calc(4 * var(--wu))) solid #ffd21a;
+  box-shadow: 0 0 calc(24 * var(--wu)) rgba(255, 200, 40, 0.75), inset 0 0 calc(30 * var(--wu)) rgba(255, 230, 140, 0.35);
+  animation: cs-legend-glow 2.4s ease-in-out infinite;
+}
+.cs-strip .cs-card.cs-legend.sel {
+  border-color: #2affff;
+}
+.cs-legend .cs-name {
+  color: #ffd21a;
+}
+.cs-legend .cs-pic {
+  background: radial-gradient(circle at 50% 75%, #ffe9a0, #c98a10 45%, #3a2400);
+  border-color: #ffd21a;
+}
+@keyframes cs-legend-glow {
+  50% {
+    box-shadow: 0 0 calc(42 * var(--wu)) rgba(255, 210, 60, 1), inset 0 0 calc(40 * var(--wu)) rgba(255, 240, 170, 0.5);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cs-strip .cs-card.cs-legend {
+    animation: none;
+  }
+}
