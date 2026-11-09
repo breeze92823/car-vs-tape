@@ -1,6 +1,6 @@
 import './hud.css'
 import { CARS, TRACK } from './config.js'
-import { boostLeft, carDef, chest, chestLeft, chestProgress, fmt, levelMult, levelNeed, rebirthCost, rebirthMult, state } from './game.js'
+import { boostLeft, carDef, chest, chestLeft, chestProgress, fmt, giftCar, giftLeft, giftProgress, levelMult, levelNeed, rebirthCost, rebirthMult, state } from './game.js'
 import { getAudioPrefs, setAudioPref } from './audio.js'
 import * as bloxity from './bloxity.js'
 import { createPanels } from './ui/panels.js'
@@ -40,16 +40,17 @@ export function createHud(actions) {
 
   // Top row.
   const top = el('div', 'hud-top')
-  const autoBtn = el('button', 'auto-btn ol', 'Auto Drive<span class="tag">OFF</span>')
-  autoBtn.type = 'button'
-  autoBtn.addEventListener('click', () => actions.onAuto())
   const boost = el('div', 'boost-chip ol', '')
   // Free Boost chest progress (game.chest, counted by the server): always in view, so the hour
   // of play is a goal the player can see filling.
   const chestChip = el('div', 'chest-chip ol', `${ICON.gift}<span></span><i></i>`)
   const chestTxt = chestChip.querySelector('span')
   const chestBar = chestChip.querySelector('i')
-  top.append(autoBtn, boost, chestChip)
+  // Free Car podium progress (game.gift): the next car above the player's best, free.
+  const giftChip = el('div', 'chest-chip gift-chip ol', `${ICON.car}<span></span><i></i>`)
+  const giftTxt = giftChip.querySelector('span')
+  const giftBar = giftChip.querySelector('i')
+  top.append(boost, chestChip, giftChip)
 
   // Left column.
   const left = el('div', 'hud-left')
@@ -59,16 +60,23 @@ export function createHud(actions) {
   const tile = (cls, icon, text, fn) => {
     const b = el('button', `tile ${cls}`, `${icon}<span class="lbl ol">${text}</span><span class="dot"></span>`)
     b.type = 'button'
-    b.addEventListener('click', fn)
+    b.addEventListener('click', () => {
+      root.classList.remove('menu-open') // touch: the menu folds away once a button is used
+      fn()
+    })
     tiles.append(b)
     return b
   }
+  // Touch: one MENU button opens/closes the tile grid so it does not cover the game view.
+  const menuBtn = el('button', 'tile menu-btn', '<svg viewBox="0 0 64 64"><g fill="#fff"><rect x="10" y="10" width="19" height="19" rx="4"/><rect x="35" y="10" width="19" height="19" rx="4"/><rect x="10" y="35" width="19" height="19" rx="4"/><rect x="35" y="35" width="19" height="19" rx="4"/></g></svg><span class="lbl ol">MENU</span>')
+  menuBtn.type = 'button'
+  menuBtn.addEventListener('click', () => root.classList.toggle('menu-open'))
   const carsTile = tile('cars', ICON.carRed, 'CARS', () => actions.onShop())
   const rebTile = tile('reb', ICON.rebirth, 'REBIRTH', () => actions.onRebirth())
   tile('train', ICON.treadmill, 'TRAIN', () => actions.onTrain())
   tile('track', ICON.flag, 'TRACK', () => actions.onTrack())
   tile('sound', ICON.gear, 'SOUND', () => openSettings())
-  left.append(wins, rebs, tiles)
+  left.append(wins, rebs, menuBtn, tiles)
 
   // Right: next tape.
   const right = el('div', 'hud-right ol')
@@ -223,17 +231,13 @@ export function createHud(actions) {
       set('lv', state.level, (v) => (lv.textContent = `Level ${v}`))
       set('xp', `${Math.floor(state.xp)} / ${need}`, (v) => (xp.textContent = v))
       set('fill', Math.round((state.xp / need) * 200) / 2, (v) => (fill.style.width = `${v}%`))
-      set('auto', state.autoDrive, (v) => {
-        autoBtn.classList.toggle('on', v)
-        autoBtn.querySelector('.tag').textContent = v ? 'ON' : 'OFF'
-      })
       const bl = boostLeft()
       set('boost', bl > 0 ? `x2 POWER ${Math.floor(bl / 60)}:${String(Math.floor(bl % 60)).padStart(2, '0')}` : '', (v) => {
         boost.textContent = v
         boost.classList.toggle('show', !!v)
       })
       const cl = chestLeft()
-      const chestText = !chest.known ? '' : cl < 0 ? 'Sign in' : cl === 0 ? 'FREE BOOST READY!' : `${Math.floor(cl / 60)}:${String(Math.floor(cl % 60)).padStart(2, '0')}`
+      const chestText = !chest.known ? '' : cl < 0 ? 'Sign in' : cl === 0 ? 'BOOST READY!' : `${Math.floor(cl / 60)}:${String(Math.floor(cl % 60)).padStart(2, '0')}`
       set('chest', chestText, (v) => {
         chestTxt.textContent = v
         chestChip.classList.toggle('show', !!v)
@@ -241,6 +245,15 @@ export function createHud(actions) {
         chestChip.classList.toggle('guest', cl < 0)
       })
       set('chestBar', Math.round(chestProgress() * 100), (v) => (chestBar.style.width = `${v}%`))
+      const gl = giftLeft()
+      const gcar = giftCar()
+      const giftText = !chest.known || !gcar || gl < 0 ? '' : gl === 0 ? 'FREE CAR!' : `${Math.floor(gl / 60)}:${String(Math.floor(gl % 60)).padStart(2, '0')}`
+      set('gift', giftText, (v) => {
+        giftTxt.textContent = v
+        giftChip.classList.toggle('show', !!v)
+        giftChip.classList.toggle('ready', gl === 0)
+      })
+      set('giftBar', Math.round(giftProgress() * 100), (v) => (giftBar.style.width = `${v}%`))
       // Next tape.
       const i = info.nextTape
       const t = TRACK.tapes[i]

@@ -9,7 +9,7 @@
 // over the passenger seat; wall hits jolt them; a treadmill hunches them over the
 // wheel, buzzing. Game moments: a tape that snaps = fists up, a tape that slingshots
 // the car back = whiplash and a dizzy head, a new car / level / rebirth = a wave,
-// Auto Drive = hands behind the head. Parked a while, they look around, drum on the
+// Parked a while, they look around, drum on the
 // wheel and now and then look at the camera.
 //
 // H / HORN: a punch on the wheel's centre. The cockpit view (carcam.js) sits at eye()
@@ -34,7 +34,11 @@ const damp = (cur, goal, rate, dt) => cur + (goal - cur) * (1 - Math.exp(-rate *
 const STEP = 1 / 120 // spring sub-step
 const P = DRIVER.pose
 
-export function createDriver(car) {
+// `opts.source` (remote players): { equipped(), proportions(), skin() } read instead of the local Bloxity SDK;
+// such a driver reacts to nothing but its own `state` and the cheer() / wave() / honk() calls it is given.
+export function createDriver(car, opts = {}) {
+  const remote = !!opts.source
+  const src = opts.source ?? { equipped: bloxity.getEquippedAvatar, proportions: bloxity.getProportions, skin: bloxity.getSkinTextureUrl }
   const group = new Group() // at the seat: hip height on the cushion, in the car body's frame
   group.name = 'driver'
   const body = new Group() // bounce + buzz
@@ -50,7 +54,7 @@ export function createDriver(car) {
   // --- The avatar: sized so the seated body fits the seat's headroom ----------------------
   function fit() {
     if (!root || !seat) return
-    applyProportions(root, bloxity.getProportions())
+    applyProportions(root, src.proportions())
     rig.resetToBindPose()
     root.position.set(0, 0, 0)
     root.updateMatrixWorld(true)
@@ -84,8 +88,8 @@ export function createDriver(car) {
     const id = ++loadId
     const next = await loadBaseCharacter()
     if (id !== loadId) return
-    const equipped = bloxity.getEquippedAvatar()
-    if (equipped) await attachEquippedAccessories(next, equipped, { skinTextureUrl: bloxity.getSkinTextureUrl() || undefined })
+    const equipped = src.equipped()
+    if (equipped) await attachEquippedAccessories(next, equipped, { skinTextureUrl: src.skin() || undefined })
     if (id !== loadId) return
     next.traverse((o) => {
       if (o.isMesh || o.isSkinnedMesh) {
@@ -103,8 +107,10 @@ export function createDriver(car) {
     markLoaded()
   }
   load()
-  bloxity.onAvatarChanged(() => load()) // may fire twice; the stale load is dropped
-  bloxity.onProportionsChanged(() => fit())
+  if (!remote) {
+    bloxity.onAvatarChanged(() => load()) // may fire twice; the stale load is dropped
+    bloxity.onProportionsChanged(() => fit())
+  }
 
   // A new car: move into its seat and refit the headroom.
   function mount(carBody, s) {
@@ -146,10 +152,12 @@ export function createDriver(car) {
     honkLeft = DRIVER.honkFor
     nodV += 3
   }
-  game.on('wins', (n) => n > 0 && cheer()) // a tape snapped
-  game.on('car', wave)
-  game.on('levelup', wave)
-  game.on('rebirth', wave)
+  if (!remote) {
+    game.on('wins', (n) => n > 0 && cheer()) // a tape snapped
+    game.on('car', wave)
+    game.on('levelup', wave)
+    game.on('rebirth', wave)
+  }
 
   const addDef = (def, k) => {
     if (k <= 0.001) return
@@ -191,15 +199,14 @@ export function createDriver(car) {
     dizzyLeft = Math.max(0, dizzyLeft - dt)
 
     // What the hands are doing (one thing at a time, blended).
-    const auto = !!game.state.autoDrive
     const reversing = car.speed < -0.8 && car.throttle < -0.05
     const goal = {
       cheer: cheerLeft > 0 ? 1 : 0,
       wave: waveLeft > 0 && cheerLeft <= 0 ? 1 : 0,
-      relax: auto && cheerLeft <= 0 && waveLeft <= 0 ? 1 : 0,
-      reverse: reversing && !auto ? 1 : 0,
+      relax: 0,
+      reverse: reversing ? 1 : 0,
       brake: car.drifting || (car.handbrake && Math.abs(car.speed) > 3) ? 1 : 0,
-      idle: stoppedFor > DRIVER.idleAfter && !auto ? 1 : 0,
+      idle: stoppedFor > DRIVER.idleAfter ? 1 : 0,
       hunch: car.pad && car.throttle > 0.1 ? 1 : 0,
       boost: boosted && car.throttle > 0.3 && !car.pad ? 1 : 0,
     }
@@ -345,6 +352,11 @@ export function createDriver(car) {
     setFirstPerson,
     seatPreview,
     whenLoaded,
+    reload: load, // remote: the player changed what they wear
+    refit: fit, // remote: ... or their proportions
+    dispose() {
+      loadId++ // a load still in flight is dropped
+    },
     get loaded() {
       return !!root
     },

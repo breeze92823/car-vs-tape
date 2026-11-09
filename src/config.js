@@ -52,9 +52,10 @@ export const PHYSICS = {
 }
 export const PLAYER_DIMS = { radius: 0.75, height: 1.8 } // capsule the character controller moves
 
+export const COARSE_POINTER = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches
+
 // --- Look ------------------------------------------------------------------
 export const RENDER = { exposure: 1.0 }
-export const FOG = { near: 190, far: 720 }
 // The two lighting moods lighting.js blends between (key N toggles).
 export const TIME_OF_DAY = {
   transition: 2.5, // s to blend day <-> night
@@ -92,7 +93,7 @@ export const TIME_OF_DAY = {
   },
 }
 export const LIGHT = {
-  shadowRange: 40, // half-width of the sun's shadow box around the player
+  shadowRange: COARSE_POINTER ? 30 : 40, // half-width of the sun's shadow box around the player
   lampColor: '#ffb35c',
   lampDistance: 22,
 }
@@ -124,9 +125,11 @@ export const NEON = { k: 3.5, plainMax: 1.2 }
 // Phones and tablets default to a lighter preset when the portal sends no value,
 // and any preset is capped there (a phone at DPR 3 renders 9x the pixels; bloom
 // is a full-screen multi-pass blur, so it stays off on phones).
-export const COARSE_POINTER = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches
 export const DEFAULT_GRAPHICS = COARSE_POINTER ? 'Medium' : 'High'
-export const MOBILE_GRAPHICS_CAP = { dpr: 1.5, shadowMap: 1024, particles: 0.6 }
+export const MOBILE_GRAPHICS_CAP = { dpr: 1.25, shadowMap: 1024, particles: 0.5 }
+// Phones: shorter view distance (fog + camera far + sky dome shrink together) and a tighter shadow box.
+export const FOG = COARSE_POINTER ? { near: 130, far: 360 } : { near: 190, far: 720 }
+export const CAMERA_FAR = COARSE_POINTER ? FOG.far + 40 : 1400
 
 // The preset to render with on this device.
 export function graphicsPreset(name) {
@@ -265,7 +268,7 @@ export const NET = {
   retry: 2, // s before the first reconnect; doubles after each failed resolve/join...
   retryMax: 30, // ...up to this
   rejoin: 1, // s before resolving again after the room closed
-  poseHz: 5, // car pose updates per second (relayed to the roster, not drawn yet)
+  poseHz: 10, // car pose updates per second (relayed to the roster, drawn by remotes.js)
 }
 
 export function clamp(n, min, max) {
@@ -432,19 +435,23 @@ export const TREADMILLS = [
 ]
 
 // The showroom (west). type: hatch | coupe | super | hyper. mult = power multiplier, speed = top speed.
+// Cars from Comet up carry a performance kit (`kit` 1..3, carmodel.js): carbon aero, neon `accent`
+// strips + light bar, hood vents and twin jet nozzles in the tail whose afterburner flames (`flame`:
+// [core, outer] colours, default blue core -> orange) grow with the throttle; kit 2 adds glowing rims
+// and light trails at speed, kit 3 bigger jets and a neon roof fin.
 export const CARS = [
   { id: 'pebble', name: 'Pebble', type: 'hatch', color: '#1f3fd1', cost: 0, mult: 1, speed: 28 },
   { id: 'bubble', name: 'Bubble', type: 'hatch', color: '#ff7fc8', cost: 3, mult: 1.5, speed: 29 },
   { id: 'sprout', name: 'Sprout', type: 'coupe', color: '#ef2b2b', cost: 10, mult: 2.2, speed: 30 },
   { id: 'glacier', name: 'Glacier', type: 'coupe', color: '#7cd3ff', cost: 30, mult: 3.5, speed: 31 },
-  { id: 'comet', name: 'Comet', type: 'super', color: '#f4f4f8', cost: 90, mult: 5.5, speed: 33 },
-  { id: 'ember', name: 'Ember', type: 'super', color: '#ff6a00', cost: 250, mult: 9, speed: 34 },
-  { id: 'viper', name: 'Viper', type: 'super', color: '#22d84a', cost: 700, mult: 15, speed: 35 },
-  { id: 'sunstrike', name: 'Sunstrike', type: 'hyper', color: '#ffc81a', cost: 2000, mult: 26, speed: 37 },
-  { id: 'redline', name: 'Redline X', type: 'hyper', color: '#e3101e', cost: 6000, mult: 45, speed: 39 },
-  { id: 'frost', name: 'Frostbite', type: 'hyper', color: '#2a6bff', cost: 18000, mult: 80, speed: 41 },
-  { id: 'onyx', name: 'Onyx', type: 'hyper', color: '#16161c', cost: 55000, mult: 150, speed: 43 },
-  { id: 'nebula', name: 'Nebula', type: 'hyper', color: '#a43bff', cost: 160000, mult: 300, speed: 46 },
+  { id: 'comet', name: 'Comet', type: 'super', color: '#f4f4f8', cost: 90, mult: 5.5, speed: 33, kit: 1, accent: '#2ae8ff', flame: ['#d8f6ff', '#2ab8ff'] },
+  { id: 'ember', name: 'Ember', type: 'super', color: '#ff6a00', cost: 250, mult: 9, speed: 34, kit: 1, accent: '#ffd21a' },
+  { id: 'viper', name: 'Viper', type: 'super', color: '#22d84a', cost: 700, mult: 15, speed: 35, kit: 1, accent: '#c6ff2a', flame: ['#f0ffd0', '#4cff2a'] },
+  { id: 'sunstrike', name: 'Sunstrike', type: 'hyper', color: '#ffc81a', cost: 2000, mult: 26, speed: 37, kit: 2, accent: '#ff5a1a' },
+  { id: 'redline', name: 'Redline X', type: 'hyper', color: '#e3101e', cost: 6000, mult: 45, speed: 39, kit: 2, accent: '#ffffff', flame: ['#fff2d8', '#ff2a1a'] },
+  { id: 'frost', name: 'Frostbite', type: 'hyper', color: '#2a6bff', cost: 18000, mult: 80, speed: 41, kit: 2, accent: '#7df6ff', flame: ['#e8fdff', '#2a8bff'] },
+  { id: 'onyx', name: 'Onyx', type: 'hyper', color: '#16161c', cost: 55000, mult: 150, speed: 43, kit: 3, accent: '#2affe8', flame: ['#e0fffb', '#00d0ff'] },
+  { id: 'nebula', name: 'Nebula', type: 'hyper', color: '#a43bff', cost: 160000, mult: 300, speed: 46, kit: 3, accent: '#ff4fd8', flame: ['#ffe0ff', '#b03bff'] },
 ]
 
 // House wall colours around the plaza.
@@ -466,3 +473,9 @@ export const REWARDED = { placement: 'boost' }
 // for `boost` s (stacks with any boost running) + a Wins bag worth `winsShare` of the next car's price
 // (rebirth cost once every car is owned), at least `winsMin`.
 export const PLAY_REWARD = { minutes: 60, boost: 15 * 60, winsShare: 0.3, winsMin: 5 }
+
+// Free Car podium (town.js, north plaza, where "next car" used to stand): a signed-in player gets the
+// next car above the best one they own, free, after a stretch of play. The server counts it and sets
+// the goal (backend playtime.ts carGiftMs: 30 min, +15 min per car already gifted, at most 2 h);
+// `minutes` is only shown before the server answers.
+export const CAR_GIFT = { minutes: 30 }

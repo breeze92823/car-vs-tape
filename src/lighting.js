@@ -30,7 +30,7 @@ import { mulberry32 } from './textures.js'
 //  - warm point-light lamps that switch on at night, with emissive bulbs
 //  - distance fog in the horizon colour, stars at night, and tone-mapping
 //    exposure, all following the same blend.
-const SKY_RADIUS = 500
+const SKY_RADIUS = Math.min(500, FOG.far * 0.85)
 
 const skyVertex = /* glsl */ `
   varying vec3 vDir;

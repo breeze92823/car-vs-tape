@@ -2,7 +2,7 @@
 // boost, the Free Boost chest, and the best tape reached. Saved on the game server only (net.js); no browser save.
 // Every change goes through here and is broadcast with emit(event, data) so
 // the HUD, world and audio react without knowing about each other.
-import { CARS, ECONOMY, PLAY_REWARD, TRACK, TREADMILLS } from './config.js'
+import { CAR_GIFT, CARS, ECONOMY, PLAY_REWARD, TRACK, TREADMILLS } from './config.js'
 
 export const state = {
   power: 0,
@@ -14,7 +14,6 @@ export const state = {
   car: 'pebble',
   bestTape: -1, // highest tape index ever snapped
   boostUntil: 0, // ms timestamp
-  autoDrive: false,
   totalWins: 0,
 }
 
@@ -167,7 +166,11 @@ export function addBoost(seconds) {
 // not part of the save, the server keeps it. `running` = the server's clock is counting (connected,
 // tab visible), so the client extrapolates from `at`. known = false until the server has answered.
 export const chest = { known: false, signedIn: false, playMs: 0, needMs: PLAY_REWARD.minutes * 60000, claims: 0, at: 0, running: false }
+// The Free Car podium's clock: same rules (known / signedIn / running / at shared with `chest`).
+export const gift = { playMs: 0, needMs: CAR_GIFT.minutes * 60000, gifts: 0, gifted: [] }
 
+// s = the server's status: { signedIn, playMs, needMs, claims, car: { playMs, needMs, gifts, gifted } };
+// null = stop / start the local extrapolation where it got to.
 export function setChest(s, running) {
   if (s && typeof s === 'object') {
     chest.known = true
@@ -175,7 +178,17 @@ export function setChest(s, running) {
     if (Number.isFinite(s.playMs)) chest.playMs = Math.max(0, s.playMs)
     if (Number.isFinite(s.needMs) && s.needMs > 0) chest.needMs = s.needMs
     if (Number.isFinite(s.claims)) chest.claims = s.claims
-  } else if (chest.known) chest.playMs = chestPlayMs() // freeze where it got to
+    const c = s.car
+    if (c && typeof c === 'object') {
+      if (Number.isFinite(c.playMs)) gift.playMs = Math.max(0, c.playMs)
+      if (Number.isFinite(c.needMs) && c.needMs > 0) gift.needMs = c.needMs
+      if (Number.isFinite(c.gifts)) gift.gifts = c.gifts
+      if (Array.isArray(c.gifted)) gift.gifted = c.gifted.filter((id) => typeof id === 'string')
+    }
+  } else if (chest.known) {
+    chest.playMs = chestPlayMs() // freeze where it got to
+    gift.playMs = giftPlayMs()
+  }
   chest.at = Date.now()
   chest.running = !!running && chest.signedIn
 }
@@ -184,6 +197,7 @@ export function forgetChest() {
   chest.known = false
 }
 const chestPlayMs = () => Math.min(chest.needMs, chest.playMs + (chest.running ? Date.now() - chest.at : 0))
+const giftPlayMs = () => Math.min(gift.needMs, gift.playMs + (chest.running ? Date.now() - chest.at : 0))
 // Seconds of play left before the chest opens (0 = ready); -1 while it can't open (unknown, guest).
 export const chestLeft = () => (chest.known && chest.signedIn ? Math.max(0, (chest.needMs - chestPlayMs()) / 1000) : -1)
 export const chestProgress = () => (chest.known && chest.signedIn ? chestPlayMs() / chest.needMs : 0)
@@ -206,10 +220,26 @@ export function openChest() {
   return r
 }
 
-export function setAutoDrive(on) {
-  state.autoDrive = on
-  emit('auto', on)
-  dirty = true
+// --- Free Car podium -------------------------------------------------------------
+// The car it gives: the next one above the best car owned (null once the top car is owned).
+export function giftCar() {
+  let best = 0
+  CARS.forEach((c, i) => state.owned.includes(c.id) && (best = i))
+  return CARS[best + 1] ?? null
+}
+// Seconds of play left before the free car (0 = ready); -1 while it can't be earned (unknown, guest).
+export const giftLeft = () => (chest.known && chest.signedIn ? Math.max(0, (gift.needMs - giftPlayMs()) / 1000) : -1)
+export const giftProgress = () => (chest.known && chest.signedIn ? giftPlayMs() / gift.needMs : 0)
+// The server said ok (net.js claimCar): the car is owned and equipped.
+export function openGift(id) {
+  const def = carDef(id)
+  if (def.id !== id) return null
+  if (!state.owned.includes(id)) state.owned.push(id)
+  state.car = id
+  emit('gift', def)
+  emit('car', id)
+  save()
+  return def
 }
 
 let saveTimer = 0

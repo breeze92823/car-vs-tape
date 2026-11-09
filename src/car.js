@@ -1,4 +1,4 @@
-import { Color, Group, PointLight, SpotLight, Vector3 } from 'three'
+import { AdditiveBlending, BufferAttribute, BufferGeometry, Color, DoubleSide, DynamicDrawUsage, Group, Mesh, PointLight, ShaderMaterial, SpotLight, Vector3 } from 'three'
 import { inputState } from './input.js'
 import { RAPIER, alpha, onTick, world } from './physics.js'
 import { CAR, DRIVER_SEAT, PHYSICS, SPAWN, SPAWN_FACING } from './config.js'
@@ -39,7 +39,7 @@ export const car = {
   frozen: false, // true while a window is open in front of the game
 }
 
-// Who drives: the keyboard/touch by default; autodrive.js swaps in its own.
+// Who drives: the keyboard/touch by default; setControlSource can swap in another.
 let controlSource = () => ({ throttle: inputState.move.z, steer: inputState.move.x, handbrake: inputState.brake })
 export function setControlSource(fn) {
   controlSource = fn
@@ -285,16 +285,113 @@ export function teleportCar(x, y, z, yaw) {
   resetCar({ x, y, z }, yaw)
 }
 
+// --- Light trail: a ribbon of neon drawn from a point on the car, in world space ---------
+// A ring of samples (newest first); the head follows the point every frame and a new sample is
+// laid down every `spacing` metres. Each sample fades out over `life` seconds, and the ribbon
+// tapers toward its tail. Allocation-free per frame.
+const TRAIL_VERT = /* glsl */ `
+  attribute float aFade;
+  varying float vFade;
+  varying float vEdge;
+  void main() {
+    vFade = aFade;
+    vEdge = mod(float(gl_VertexID), 2.0);
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }`
+const TRAIL_FRAG = /* glsl */ `
+  uniform vec3 uColor;
+  varying float vFade;
+  varying float vEdge;
+  void main() {
+    float across = 1.0 - abs(vEdge * 2.0 - 1.0); // 0 at the ribbon's edges, 1 down its middle
+    gl_FragColor = vec4(uColor * (1.4 + vFade * 2.0), vFade * (0.55 + 0.45 * across));
+  }`
+function makeTrail(scene, n = 44) {
+  const pos = new Float32Array(n * 2 * 3)
+  const fade = new Float32Array(n * 2)
+  const index = []
+  for (let i = 0; i < n - 1; i++) {
+    const a = i * 2
+    index.push(a, a + 1, a + 2, a + 1, a + 3, a + 2)
+  }
+  const geo = new BufferGeometry()
+  geo.setAttribute('position', new BufferAttribute(pos, 3).setUsage(DynamicDrawUsage))
+  geo.setAttribute('aFade', new BufferAttribute(fade, 1).setUsage(DynamicDrawUsage))
+  geo.setIndex(index)
+  const mat = new ShaderMaterial({ uniforms: { uColor: { value: new Color() } }, vertexShader: TRAIL_VERT, fragmentShader: TRAIL_FRAG, transparent: true, depthWrite: false, blending: AdditiveBlending, side: DoubleSide })
+  const mesh = new Mesh(geo, mat)
+  mesh.frustumCulled = false
+  mesh.renderOrder = 6
+  mesh.visible = false
+  scene.add(mesh)
+  // Samples: x, y, z, right-vector x/z, time laid down.
+  const sx = new Float32Array(n)
+  const sy = new Float32Array(n)
+  const sz = new Float32Array(n)
+  const rx = new Float32Array(n)
+  const rz = new Float32Array(n)
+  const st = new Float32Array(n)
+  let count = 0
+  const shift = () => {
+    for (const a of [sx, sy, sz, rx, rz, st]) a.copyWithin(1, 0, n - 1)
+    count = Math.min(n, count + 1)
+  }
+  return {
+    mesh,
+    setColor: (c) => mat.uniforms.uColor.value.set(c),
+    clear: () => (count = 0),
+    // (x, y, z) = the point now; (rxv, rzv) = the car's right vector; on = still laying trail.
+    update(x, y, z, rxv, rzv, time, on, width = 0.16, life = 0.45, spacing = 0.35) {
+      const jump = count && Math.hypot(x - sx[0], z - sz[0]) > 6 // teleported
+      if (jump) count = 0
+      if (on) {
+        if (count < 2 || Math.hypot(sx[0] - sx[1], sz[0] - sz[1]) > spacing) shift()
+        sx[0] = x
+        sy[0] = y
+        sz[0] = z
+        rx[0] = rxv
+        rz[0] = rzv
+        st[0] = time
+      }
+      let live = 0
+      for (let i = 0; i < count; i++) {
+        const age = (on && i === 0 ? 0 : time - st[i]) / life
+        const f = Math.max(0, 1 - age) * (1 - i / n)
+        if (f > 0) live = i + 1
+        const w = width * (0.35 + 0.65 * f)
+        const k = i * 6
+        pos[k] = sx[i] - rx[i] * w
+        pos[k + 1] = sy[i]
+        pos[k + 2] = sz[i] - rz[i] * w
+        pos[k + 3] = sx[i] + rx[i] * w
+        pos[k + 4] = sy[i]
+        pos[k + 5] = sz[i] + rz[i] * w
+        fade[i * 2] = fade[i * 2 + 1] = f
+      }
+      count = live
+      mesh.visible = count > 1
+      if (mesh.visible) {
+        geo.setDrawRange(0, (count - 1) * 6)
+        geo.attributes.position.needsUpdate = true
+        geo.attributes.aFade.needsUpdate = true
+      }
+    },
+  }
+}
+
 // --- Visuals: the model, suspension, wheels, lamps and particles ----------------
-export function createCarView(scene, fx, preset) {
+// `st` = the car state it follows (the local `car`, or a remote player's look-alike, remotes.js).
+// `opts.remote` = no lights (they would change every material's shader) and an avatar read from
+// `opts.source` (driver.js); `opts.fxRange` limits the particles to cars near the camera.
+export function createCarView(scene, fx, preset, st = car, opts = {}) {
   const root = new Group()
   scene.add(root)
   let parts = null
   let def = null
-  const driver = createDriver(car) // the player's avatar in the driver's seat (driver.js)
+  const driver = createDriver(st, opts) // the player's avatar in the driver's seat (driver.js)
 
   // Headlight beam + underglow light (one each, on every preset but Low).
-  const lightsOn = preset.particles >= 0.5
+  const lightsOn = !opts.remote && preset.particles >= 0.5
   const beam = lightsOn ? new SpotLight('#eaf4ff', 0, 40, 0.5, 0.6, 1.2) : null
   const glowLight = lightsOn ? new PointLight('#ffffff', 0, 7, 1.6) : null
   if (beam) {
@@ -306,6 +403,14 @@ export function createCarView(scene, fx, preset) {
     glowLight.position.set(0, 0.35, 0)
     root.add(glowLight)
   }
+  // Performance-kit cars: afterburner glow on the road behind the jets + neon light trails
+  // from the tail lamps at speed. Always in the scene (a light appearing would recompile every
+  // material); dark and hidden on cars without the kit.
+  const jetLight = lightsOn ? new PointLight('#ff7a1a', 0, 6, 1.8) : null
+  if (jetLight) root.add(jetLight)
+  const trails = !opts.remote && preset.particles >= 0.5 ? [makeTrail(scene), makeTrail(scene)] : []
+  let jetHeat = 0
+  let jetT = 0
 
   function setCar(d) {
     if (parts) root.remove(parts.root)
@@ -313,9 +418,18 @@ export function createCarView(scene, fx, preset) {
     parts = buildCar(d, { lights: true })
     root.add(parts.root)
     driver.mount(parts.body, parts.seat)
-    car.topSpeed = d.speed
-    if (glowLight) glowLight.color.set(d.color)
-    parts.under.material.color.set(d.color)
+    st.topSpeed = d.speed
+    if (glowLight) glowLight.color.set(parts.glowColor)
+    parts.under.material.color.set(parts.glowColor)
+    if (jetLight) {
+      jetLight.color.set(parts.flameColor)
+      jetLight.intensity = 0
+      jetLight.position.set(0, parts.jets[0]?.y ?? 0.5, (parts.jets[0]?.z ?? 0) - 0.9)
+    }
+    for (const tr of trails) {
+      tr.setColor(parts.accent)
+      tr.clear()
+    }
   }
 
   let pitch = 0
@@ -342,61 +456,99 @@ export function createCarView(scene, fx, preset) {
       night = n
     },
     update(dt, camera, elapsed, boosted) {
-      const p = car.renderPosition
+      const p = st.renderPosition
       root.position.set(p.x, p.y, p.z)
-      root.rotation.y = car.renderYaw
+      root.rotation.y = st.renderYaw
       if (!parts) return
 
       // Suspension: squat under acceleration, dive under braking, lean in turns.
-      const accel = dt > 0 ? (car.wheelSpeed - lastSpeed) / dt : 0
-      lastSpeed = car.wheelSpeed
+      const accel = dt > 0 ? (st.wheelSpeed - lastSpeed) / dt : 0
+      lastSpeed = st.wheelSpeed
       const pitchTarget = Math.max(-0.06, Math.min(0.06, -accel * 0.0028))
-      const rollTarget = Math.max(-0.07, Math.min(0.07, car.yawRate * Math.abs(car.speed) * 0.0035 + (car.drifting ? Math.sign(car.lateral) * 0.02 : 0)))
+      const rollTarget = Math.max(-0.07, Math.min(0.07, st.yawRate * Math.abs(st.speed) * 0.0035 + (st.drifting ? Math.sign(st.lateral) * 0.02 : 0)))
       // Damped springs.
       pitchV += ((pitchTarget - pitch) * 90 - pitchV * 12) * dt
       rollV += ((rollTarget - roll) * 90 - rollV * 12) * dt
       pitch += pitchV * dt
       roll += rollV * dt
-      const rumble = car.pad ? Math.sin(elapsed * 60) * 0.008 : 0
+      const rumble = st.pad ? Math.sin(elapsed * 60) * 0.008 : 0
       parts.body.rotation.set(pitch, 0, roll)
-      parts.body.position.y = rumble + (car.pad ? 0.02 : 0)
+      parts.body.position.y = rumble + (st.pad ? 0.02 : 0)
 
       // Wheels.
       for (const w of parts.wheels) {
-        w.spin.rotation.x += (car.wheelSpeed * dt) / parts.dims.wheelR
-        if (w.front) w.pivot.rotation.y = -car.steerAngle
+        w.spin.rotation.x += (st.wheelSpeed * dt) / parts.dims.wheelR
+        if (w.front) w.pivot.rotation.y = -st.steerAngle
       }
-      if (parts.steering) parts.steering.spin.rotation.z = car.steerAngle * DRIVER_SEAT.wheelTurn
+      if (parts.steering) parts.steering.spin.rotation.z = st.steerAngle * DRIVER_SEAT.wheelTurn
       setNeonLevel(parts.dashMat, 1.6 + night * 2.4)
-      driver.update(dt, elapsed, camera, boosted) // reads car.bump before the sparks below clear it
+      // (a far remote car keeps its last pose: the avatar is the costly part)
+      if (!opts.driverRange || Math.hypot(camera.position.x - p.x, camera.position.z - p.z) < opts.driverRange) driver.update(dt, elapsed, camera, boosted) // reads the car state bump before the sparks below clear it
 
       // Lamps: brake lights flare, headlight flares face the camera only from the front.
-      setNeonLevel(parts.tailMat, car.braking ? 6 : 2.2)
+      setNeonLevel(parts.tailMat, st.braking ? 6 : 2.2)
       camDir.set(camera.position.x - p.x, 0, camera.position.z - p.z).normalize()
-      const fwdDot = camDir.x * Math.sin(car.renderYaw) + camDir.z * Math.cos(car.renderYaw)
+      const fwdDot = camDir.x * Math.sin(st.renderYaw) + camDir.z * Math.cos(st.renderYaw)
       const flareK = 0.6 + night * 0.6
       for (const f of parts.flares) f.material.opacity = Math.max(0, fwdDot) * flareK
-      for (const f of parts.flares.tail ?? []) f.material.opacity = Math.max(0, -fwdDot) * (car.braking ? 1 : 0.45) * (0.7 + night * 0.5)
+      for (const f of parts.flares.tail ?? []) f.material.opacity = Math.max(0, -fwdDot) * (st.braking ? 1 : 0.45) * (0.7 + night * 0.5)
       if (beam) beam.intensity = 4 + night * 60
       if (glowLight) glowLight.intensity = 2 + night * 10 + (boosted ? 4 : 0)
       parts.under.material.opacity = 0.35 + night * 0.4 + (boosted ? 0.25 : 0)
 
       // --- Particles, in world space ---
-      const yaw = car.renderYaw
+      if (opts.fxRange && Math.hypot(camera.position.x - p.x, camera.position.z - p.z) > opts.fxRange) {
+        st.bump = 0
+        return
+      }
+      const yaw = st.renderYaw
       const sin = Math.sin(yaw)
       const cos = Math.cos(yaw)
       const toWorld = (lx, ly, lz) => tmp.set(p.x + lx * cos + lz * sin, p.y + ly, p.z - lx * sin + lz * cos)
-      const busy = Math.abs(car.wheelSpeed) / car.topSpeed
+      const busy = Math.abs(st.wheelSpeed) / st.topSpeed
+
+      // Jets (performance kit): the afterburner grows with the throttle (full on a treadmill,
+      // longer and hotter boosted), throws embers and lights the road behind the car.
+      const jetting = parts.jets.length > 0
+      if (jetting) {
+        const thr = Math.max(0, st.throttle)
+        const target = thr + (boosted && thr > 0.1 ? 0.7 : 0)
+        jetHeat += (target - jetHeat) * Math.min(1, dt * (target > jetHeat ? 8 : 4))
+        const len = 0.3 + jetHeat * 1.25 + (parts.kit - 1) * 0.15 * jetHeat
+        const wide = 0.85 + Math.min(1, jetHeat) * 0.25
+        for (const j of parts.jets) j.flame?.userData.set(elapsed, 0.45 + Math.min(1, jetHeat) * 0.55 + (jetHeat > 1 ? 0.3 : 0), len * (0.9 + Math.random() * 0.2), wide)
+        setNeonLevel(parts.accentMat, 2.8 + night * 1.2 + (boosted ? 1.2 + Math.sin(elapsed * 9) * 0.8 : 0))
+        if (jetLight) jetLight.intensity = (0.6 + jetHeat * 5) * (1 + night * 1.5)
+        jetT -= dt
+        if (jetT <= 0 && jetHeat > 0.25) {
+          jetT = 0.035
+          for (const j of parts.jets) {
+            toWorld(j.x, j.y, j.z - 0.2 - Math.random() * len * 0.5)
+            const back = 9 + jetHeat * 9
+            fx.glow({ x: tmp.x, y: tmp.y, z: tmp.z, vx: st.velocity.x - sin * back + (Math.random() - 0.5) * 2, vy: (Math.random() - 0.3) * 1.5, vz: st.velocity.z - cos * back + (Math.random() - 0.5) * 2, life: 0.2 + Math.random() * 0.15, size: j.r * 4.5, sizeEnd: 0.05, color: Math.random() < 0.35 ? parts.accent : parts.flameColor, drag: 3 })
+            if (jetHeat > 0.9 && Math.random() < 0.5) fx.glow({ x: tmp.x, y: tmp.y, z: tmp.z, vx: st.velocity.x - sin * back * 0.6 + (Math.random() - 0.5) * 4, vy: 1 + Math.random() * 3, vz: st.velocity.z - cos * back * 0.6 + (Math.random() - 0.5) * 4, life: 0.5, size: 0.22, sizeEnd: 0.02, color: '#ffffff', drag: 1.5, gravity: -9 })
+          }
+        }
+      } else if (jetLight) jetLight.intensity = 0
+
+      // Light trails from the tail lamps (kit 2+), above ~45% of top speed.
+      const trailOn = parts.kit >= 2 && Math.abs(st.speed) > st.topSpeed * 0.45
+      for (let i = 0; i < trails.length; i++) {
+        const tp = parts.trailPoints[i]
+        if (!tp) continue
+        toWorld(tp[0] * 1.02, tp[1] - 0.08, tp[2] + 0.05)
+        trails[i].update(tmp.x, tmp.y, tmp.z, -cos, sin, elapsed, trailOn, boosted ? 0.13 : 0.09)
+      }
 
       // Exhaust: puffs scale with throttle; flames while boosted.
       smokeT -= dt
       if (smokeT <= 0) {
-        smokeT = 0.05 + (1 - Math.abs(car.throttle)) * 0.08
+        smokeT = 0.05 + (1 - Math.abs(st.throttle)) * 0.08
         for (const tip of parts.exhaustTips) {
           toWorld(tip.x, tip.y, tip.z)
-          const back = 1.5 + Math.abs(car.throttle) * 2
-          fx.smoke({ x: tmp.x, y: tmp.y, z: tmp.z, vx: -sin * back + (Math.random() - 0.5) * 0.4, vy: 0.5 + Math.random() * 0.4, vz: -cos * back + (Math.random() - 0.5) * 0.4, life: 0.9, size: 0.25, sizeEnd: 1.1, color: '#c9ccd6', alpha: 0.06 + Math.abs(car.throttle) * 0.12, drag: 1.6 })
-          if (boosted && car.throttle > 0.1) {
+          const back = 1.5 + Math.abs(st.throttle) * 2
+          fx.smoke({ x: tmp.x, y: tmp.y, z: tmp.z, vx: -sin * back + (Math.random() - 0.5) * 0.4, vy: 0.5 + Math.random() * 0.4, vz: -cos * back + (Math.random() - 0.5) * 0.4, life: 0.9, size: 0.25, sizeEnd: 1.1, color: '#c9ccd6', alpha: (0.06 + Math.abs(st.throttle) * 0.12) * (jetting ? 0.5 : 1), drag: 1.6 })
+          if (boosted && st.throttle > 0.1 && !jetting) {
             fx.glow({ x: tmp.x, y: tmp.y, z: tmp.z, vx: -sin * 6, vy: 0.2, vz: -cos * 6, life: 0.22, size: 0.7, sizeEnd: 0.1, color: Math.random() < 0.5 ? '#5fd0ff' : '#ff9a2a', drag: 4 })
           }
         }
@@ -404,11 +556,11 @@ export function createCarView(scene, fx, preset) {
 
       // Tyre smoke: drifting, burnouts on a treadmill, hard launches.
       tyreT -= dt
-      const burn = car.pad && car.throttle > 0.1
-      if ((car.drifting || burn || (car.throttle > 0.5 && Math.abs(car.speed) < 4 && busy > 0.1)) && tyreT <= 0) {
+      const burn = st.pad && st.throttle > 0.1
+      if ((st.drifting || burn || (st.throttle > 0.5 && Math.abs(st.speed) < 4 && busy > 0.1)) && tyreT <= 0) {
         tyreT = burn ? 0.08 : 0.03
         for (const w of parts.wheels) {
-          if (w.front && !car.drifting) continue
+          if (w.front && !st.drifting) continue
           const wp = w.pivot.position
           toWorld(wp.x, 0.15, wp.z - 0.2)
           fx.smoke({ x: tmp.x, y: tmp.y, z: tmp.z, vx: (Math.random() - 0.5) * 1.5 - (burn ? sin * 5 : 0), vy: 0.6 + Math.random(), vz: (Math.random() - 0.5) * 1.5 - (burn ? cos * 5 : 0), life: 1.1, size: 0.5, sizeEnd: 2.2, color: '#eef0f6', alpha: burn ? 0.18 : 0.32, drag: 1.2 })
@@ -416,22 +568,22 @@ export function createCarView(scene, fx, preset) {
       }
 
       // Treadmill: sparkles thrown off the belt in the pad colour, speed streaks.
-      if (car.pad) {
+      if (st.pad) {
         padT -= dt
         if (padT <= 0) {
           padT = 0.03
-          const c = car.pad.accent
+          const c = st.pad.accent
           toWorld((Math.random() - 0.5) * 2.4, 0.1, -parts.dims.front * 0.4 - Math.random() * 2)
           fx.glow({ x: tmp.x, y: tmp.y, z: tmp.z, vx: -sin * (6 + busy * 8) + (Math.random() - 0.5) * 2, vy: 1 + Math.random() * 3, vz: -cos * (6 + busy * 8) + (Math.random() - 0.5) * 2, life: 0.7, size: 0.45, sizeEnd: 0.05, color: Math.random() < 0.3 ? white : c, drag: 1.5, gravity: -6 })
         }
       }
 
       // Wall bump: sparks and a ring.
-      if (car.bump) {
-        const k = Math.min(1, car.bump / 20)
+      if (st.bump) {
+        const k = Math.min(1, st.bump / 20)
         toWorld(0, 0.6, parts.dims.front)
         fx.sparks(tmp.x, tmp.y, tmp.z, Math.round(10 + 20 * k), ['#ffd76a', '#ffffff', '#ff9a2a'], 7, 0.5, 0.35)
-        car.bump = 0
+        st.bump = 0
       }
     },
   }

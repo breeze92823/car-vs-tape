@@ -1,6 +1,6 @@
 import * as THREE from 'three'
-import { ACESFilmicToneMapping, Clock, Color, DirectionalLight, HemisphereLight, PCFSoftShadowMap, PerspectiveCamera, Scene, SRGBColorSpace, Vector3, WebGLRenderer } from 'three'
-import { CAR_CAM, CARS, ECONOMY, REWARDED, SPAWN, SPAWN_FACING, TRACK, TREADMILLS, graphicsPreset } from './config.js'
+import { ACESFilmicToneMapping, Clock, Color, DirectionalLight, HemisphereLight, PCFShadowMap, PCFSoftShadowMap, PerspectiveCamera, Scene, SRGBColorSpace, Vector3, WebGLRenderer } from 'three'
+import { CAMERA_FAR, CAR_CAM, CARS, COARSE_POINTER, ECONOMY, REWARDED, SPAWN, SPAWN_FACING, TRACK, TREADMILLS, graphicsPreset } from './config.js'
 import * as bloxity from './bloxity.js'
 import { install as installInput, onKey } from './input.js'
 import { installTouch } from './touch.js'
@@ -16,10 +16,10 @@ import { buildTown } from './town.js'
 import { buildTrack } from './track.js'
 import { buildCar } from './carmodel.js'
 import { createHud } from './hud.js'
-import { initAutoDrive, noteBounce, noteFinish } from './autodrive.js'
 import { installAudio, isMuted, setAudioPref, sfx, toggleMute, updateEngine } from './audio.js'
 import * as game from './game.js'
-import { claimChest, hasServer, initNet, net, verifyAdReward } from './net.js'
+import { claimCar, claimChest, hasServer, initNet, net, sendEmote, verifyAdReward } from './net.js'
+import { createRemotes } from './remotes.js'
 
 // Boot: Bloxity SDK -> renderer -> Rapier -> sky/lighting, ground, town, track,
 // car -> HUD -> loop. The SDK is optional at every step.
@@ -53,13 +53,13 @@ renderer = new WebGLRenderer({ antialias: preset.antialias, powerPreference: 'hi
 renderer.outputColorSpace = SRGBColorSpace
 renderer.toneMapping = ACESFilmicToneMapping
 renderer.shadowMap.enabled = preset.shadows
-renderer.shadowMap.type = PCFSoftShadowMap
+renderer.shadowMap.type = COARSE_POINTER ? PCFShadowMap : PCFSoftShadowMap
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, preset.dpr))
 document.body.appendChild(renderer.domElement)
 installInput(() => bloxity.showMenu(), renderer.domElement)
 
 const scene = new Scene()
-const camera = new PerspectiveCamera(CAR_CAM.fov, 1, 0.1, 1400)
+const camera = new PerspectiveCamera(CAR_CAM.fov, 1, 0.1, CAMERA_FAR)
 postfx = createPostFx(renderer, scene, camera)
 postfx.configure(preset)
 
@@ -86,10 +86,12 @@ createCarBody()
 const carView = createCarView(scene, fx, preset)
 carView.setCar(game.carDef())
 setCameraDriver(carView.driver) // the cockpit view sits at the driver's eyes
+const remotes = createRemotes({ scene, fx, preset }) // the other players' cars, avatars and name plates
 // H / HORN: honk, and the driver punches the wheel.
 function honk() {
   sfx.horn()
   carView.driver.honk()
+  sendEmote(3)
 }
 const town = buildTown(scene, lighting, fx, preset)
 setPads(town.pads)
@@ -151,15 +153,13 @@ const track = buildTrack(scene, fx, {
     sfx.twang()
     shakeCamera(0.6)
     hud.toast(`Need ${game.fmt(power)} Power for tape #${i + 1}!`, 'bad')
-    noteBounce(power)
   },
   onFinish() {
     hud.banner('TRACK COMPLETE!', '#7dff5a')
     const p = car.position
     fx.confetti(p.x, 3, p.z - 6, 160, ['#ffd21a', '#ffffff', '#7dff5a', '#2ae8ff', '#ff4fb8'], 14)
     sfx.levelUp()
-    noteFinish()
-    if (!state.autoDrive) setTimeout(goHome, 2200)
+    setTimeout(goHome, 2200)
   },
 })
 
@@ -217,6 +217,42 @@ async function openChest() {
   }
 }
 
+// Free Car podium: the next car above the player's best, free once the server's play clock for it
+// is done (net.js claimCar). On ok the car is owned and equipped (game.openGift -> 'car' event).
+let giftBusy = false
+async function openGift() {
+  if (giftBusy) return
+  const def = game.giftCar()
+  if (!def) return hud.toast('You own every car!', 'good')
+  const left = game.giftLeft()
+  if (!hasServer()) return hud.toast('The Free Car needs the game server', 'bad')
+  if (!net.connected || !game.chest.known) return hud.toast('Connecting to the server...', 'bad')
+  if (!game.chest.signedIn) return hud.toast(`Sign in to Bloxity (top-left) to win ${def.name} free!`, 'bad')
+  if (left > 0) return hud.toast(`Play ${minutesLeft(left)} more to drive ${def.name} home free`)
+  giftBusy = true
+  try {
+    const r = await claimCar(def.id)
+    if (r.ok) {
+      town.giftBurst()
+      hitstop = 0.25
+      shakeCamera(0.5)
+      sfx.levelUp()
+      sfx.buy()
+      game.openGift(def.id)
+      hud.flash('#ffd21a')
+      hud.banner(`FREE CAR: ${def.name.toUpperCase()}!`, '#ffd21a')
+      hud.toast(`${def.name} is yours! x${def.mult} Power`, 'good')
+    } else if (r.reason === 'early') hud.toast(`Play ${minutesLeft(Math.max(1, game.giftLeft()))} more to drive ${def.name} home free`)
+    else if (r.reason === 'signin') hud.toast(`Sign in to Bloxity (top-left) to win ${def.name} free!`, 'bad')
+    else if (r.reason === 'owned') {
+      game.openGift(def.id) // already gifted on this account: just make sure it's owned
+      hud.toast(`${def.name} is already yours`, 'good')
+    } else hud.toast('Could not reach the server, try again', 'bad')
+  } finally {
+    giftBusy = false
+  }
+}
+
 function runZone(z) {
   if (!z) return
   if (z.id === 'chest-ad') watchBoostAd()
@@ -225,10 +261,6 @@ function runZone(z) {
 }
 
 const hud = createHud({
-  onAuto() {
-    game.setAutoDrive(!state.autoDrive)
-    sfx.click()
-  },
   onShop: () => hud.openShop(),
   onRebirth: () => hud.openRebirth(),
   onTrain: goTrain,
@@ -282,11 +314,9 @@ game.on('rebirth', () => {
   fx.confetti(p.x, 2, p.z, 90, ['#ff7ad9', '#ffffff', '#c06bff'], 10)
 })
 game.on('boost', () => sfx.boost())
-game.on('auto', (on) => hud.toast(on ? 'Auto Drive ON' : 'Auto Drive OFF', on ? 'good' : ''))
 let powerAcc = 0
 game.on('power', (n) => (powerAcc += n))
 
-initAutoDrive(town.pads, goHome)
 // Server link: progress (hydrate -> refresh the world and plate), live leaderboards.
 initNet({ setLeaderboard: town.setLeaderboard })
 game.on('hydrate', () => {
@@ -320,7 +350,7 @@ function syncAdScreen() {
   bloxity.adScreen(next, next === 'panel' ? { skip: ['top-right'] } : undefined)
 }
 // A message from the portal's chat box floats over the car for a few seconds.
-bloxity.onChat((m) => m.isLocal && bloxity.attachChatBubble(THREE, carView.root, m.text))
+bloxity.onChat((m) => (m.isLocal ? bloxity.attachChatBubble(THREE, carView.root, m.text) : remotes.chat(m, THREE)))
 // The portal menu's Reset Character: back to the plaza.
 bloxity.onRespawnRequest(goHome)
 
@@ -328,7 +358,6 @@ bloxity.onRespawnRequest(goHome)
 onKey('KeyN', () => lighting.toggleDayNight())
 onKey('KeyR', goHome)
 onKey('KeyE', () => runZone(activeZone))
-onKey('KeyF', () => game.setAutoDrive(!state.autoDrive))
 onKey('KeyC', () => (hud.isOpen() ? hud.close() : hud.openShop()))
 onKey('KeyM', toggleMute)
 onKey('KeyH', honk)
@@ -433,6 +462,7 @@ function frame() {
   if (near !== lastZone) {
     lastZone = near
     if (near?.id === 'chest') openChest()
+    else if (near?.id === 'gift') openGift()
     else if (near?.id === 'portal') hud.toast(state.rebirths >= 10 ? 'World 2 is coming soon!' : 'World 2 needs 10 Rebirths', 'bad')
   }
   activeZone = near && near.prompt ? near : near?.id === 'chest' && game.chestLeft() !== 0 && bloxity.adsAvailable() && !adBusy ? CHEST_AD : null
@@ -441,6 +471,7 @@ function frame() {
   night += ((lighting.isNight() ? 1 : 0) - night) * Math.min(1, dt / 2)
   carView.setNight(night)
   carView.update(dt, camera, elapsed, boosted)
+  remotes.update(dt, camera, elapsed, night)
   updateCamera(camera, rawDt)
   town.update(dt, elapsed, p)
   track.update(dt)
@@ -491,5 +522,5 @@ document.addEventListener('visibilitychange', () => document.hidden && game.save
 
 if (import.meta.env.DEV) {
   import('./devviews.js').then((m) => (window.__game.views = m.makeViews(window.__game)))
-  window.__game = { pause: () => renderer.setAnimationLoop(null), resume: () => renderer.setAnimationLoop(frame), buildCar, CARS, car, scene, renderer, camera, postfx, fx, game, track, town, bodies: bodyCount, goHome, goTrain, goTrack, teleport: teleportCar }
+  window.__game = { pause: () => renderer.setAnimationLoop(null), resume: () => renderer.setAnimationLoop(frame), buildCar, CARS, car, scene, renderer, camera, postfx, fx, game, track, town, bodies: bodyCount, net, remotes, goHome, goTrain, goTrack, teleport: teleportCar }
 }

@@ -11,6 +11,7 @@ import {
   MeshStandardMaterial,
   PlaneGeometry,
   PointLight,
+  RingGeometry,
   RepeatWrapping,
   ShaderMaterial,
   Shape,
@@ -19,15 +20,15 @@ import {
 import { CARS, HOUSE_COLORS, TOWN, TRACK, TREADMILLS } from './config.js'
 import { brickBox, brickMat } from './world.js'
 import { bake } from './bake.js'
-import { label, neon, relabel, setNeonColor, setNeonLevel, solidBox } from './propkit.js'
+import { fontReady, glow, label, neon, relabel, setNeonColor, setNeonLevel, solidBox } from './propkit.js'
 import { buildCar } from './carmodel.js'
 import { mulberry32, toTexture } from './textures.js'
 import { paintBelt, paintDoor, paintWood } from './bricktex.js'
-import { chest as chestState, chestLeft, chestProgress, fmt, state, treadmillUnlocked } from './game.js'
+import { chest as chestState, chestLeft, chestProgress, fmt, giftCar, giftLeft, giftProgress, state, treadmillUnlocked } from './game.js'
 
 // The plaza and everything standing in it:
 //   north  - the gate to the tape track (roll-up door, best-tape bar), the
-//            free boost chest, the "next car" podium, two market stalls
+//            free boost chest, the free car podium, two market stalls
 //   east   - a row of treadmills (one per multiplier, locked by rebirths)
 //   west   - the terraced car showroom
 //   south  - three leaderboards and the locked World 2 portal
@@ -225,12 +226,13 @@ export function buildTown(scene, lighting, fx, preset) {
   const gate = buildGate(dressing, live)
   updaters.push(gate.update)
 
-  // --- North: free boost chest + "next car" podium + stalls ---------------------
+  // --- North: free boost chest + free car podium + stalls ---------------------
   const chest = buildChest(live, 30, N + 8, fx)
   zones.push({ id: 'chest', x: 30, z: N + 9, r: 6, auto: true })
   updaters.push(chest.update)
 
-  const featured = buildFeatured(live, 15, N + 8)
+  const featured = buildGiftPodium(live, 15, N + 8, fx)
+  zones.push({ id: 'gift', x: 15, z: N + 11, r: 5.5, auto: true })
   updaters.push(featured.update)
 
   const stallA = buildStall(dressing, live, -20, N + 8, '#2a7bff', 'REBIRTH')
@@ -267,6 +269,7 @@ export function buildTown(scene, lighting, fx, preset) {
     zones,
     setLeaderboard,
     pads: tm.pads,
+    giftBurst: () => featured.burst(),
     refresh() {
       showroom.refresh()
       featured.refresh()
@@ -420,39 +423,143 @@ function buildChest(live, x, z, fx) {
   }
 }
 
-// --- "Next car" podium: the cheapest car you don't own, turning slowly -------------------------
-function buildFeatured(live, x, z) {
+// --- Free Car podium: the next car above your best, free after a stretch of play -----------
+// (game.gift, counted by the server). A gold ring on the deck fills with the play clock, light beams
+// sweep the sky and sparkles in the car's colour rise faster as it fills; once ready the car lifts
+// off and spins over a gold fountain. burst() is the claim; the next car pops in after it.
+function buildGiftPodium(live, x, z, fx) {
   const g = new Group()
   g.position.set(x, 0, z)
   live.add(g)
-  const plat = add(g, new BoxGeometry(7, 0.5, 5), new MeshStandardMaterial({ color: '#2a2f42', roughness: 0.6 }), 0, 0.25, 0)
-  const rim = neon('#ff2a2a', 3)
+  add(g, new BoxGeometry(7, 0.5, 5), new MeshStandardMaterial({ color: '#2a2f42', roughness: 0.6 }), 0, 0.25, 0)
+  const rim = neon('#ffd21a', 3)
   for (const [w, d, px, pz] of [[7.2, 0.25, 0, 2.55], [7.2, 0.25, 0, -2.55], [0.25, 5.2, 3.55, 0], [0.25, 5.2, -3.55, 0]]) add(g, new BoxGeometry(w, 0.55, d), rim, px, 0.27, pz, { cast: false })
   solidBox(3.5, 0.25, 2.5, x, 0.25, z)
-  void plat
+
+  // Progress ring on the deck: a dim track and a gold arc that grows with the play clock.
+  const R0 = 2.05
+  const R1 = 2.4
+  const track = add(g, new RingGeometry(R0, R1, 64), new MeshBasicMaterial({ color: '#141826' }), 0, 0.51, 0, { cast: false })
+  track.rotation.x = -Math.PI / 2
+  const arc = add(g, new RingGeometry(R0, R1, 64, 1, Math.PI / 2, 0.001), neon('#ffd21a', 3), 0, 0.52, 0, { cast: false })
+  arc.rotation.x = -Math.PI / 2
+  let arcPct = -1
+
+  // Searchlight beams from the four corners, sweeping.
+  const beamGeo = new CylinderGeometry(1.3, 0.16, 18, 14, 1, true)
+  beamGeo.translate(0, 9, 0)
+  const beams = []
+  for (const [bx, bz] of [[-3.1, -2.1], [3.1, -2.1], [-3.1, 2.1], [3.1, 2.1]]) {
+    const pivot = new Group()
+    pivot.position.set(bx, 0.5, bz)
+    g.add(pivot)
+    const mat = glow('#fff1b0', 0.1)
+    const beam = new Mesh(beamGeo, mat)
+    beam.renderOrder = 5
+    pivot.add(beam)
+    beams.push({ pivot, mat, phase: beams.length * 1.7, lean: Math.sign(bx) })
+  }
+
   const turn = new Group()
   turn.position.y = 0.5
   g.add(turn)
+  const title = sign(live, 'FREE CAR', x, 8.2, z, 1.9, { color: '#ffd21a' })
+  const name = sign(live, ' ', x, 6.6, z, 1.4, { color: '#ffffff' })
+  const timer = sign(live, ' ', x, 5.2, z, 1.3, { color: '#ffffff' })
+
   let model = null
   let shownId = null
-  let title = null
+  let color = '#ffd21a'
+  let lastText = ''
+  let sparkT = 0
+  let popT = 1 // a new car scales in
+  let flash = 0 // beams flare after a claim
+  const white = new Color('#ffffff')
   const refresh = () => {
-    const next = CARS.find((c) => !state.owned.includes(c.id)) ?? CARS[CARS.length - 1]
-    if (next.id === shownId) return
-    shownId = next.id
+    const def = giftCar() ?? CARS[CARS.length - 1]
+    if (def.id === shownId) return
+    const first = shownId === null
+    shownId = def.id
     if (model) turn.remove(model)
-    model = buildCar(next, { static: true }).root
+    model = buildCar(def, { static: true }).root
     turn.add(model)
-    if (title) live.remove(title)
-    title = label(`NEXT CAR\n${next.name}\n${fmt(next.cost)} Wins`, 3.6, { colors: ['#7dff5a', '#ffffff', '#ffd21a'] })
-    title.position.set(x, 5.4, z)
-    live.add(title)
+    popT = first ? 1 : 0
+    color = def.color
+    const paintName = () => relabel(name, def.name, 1.4, { color: new Color(def.color).lerp(white, 0.45).getStyle() })
+    paintName()
+    fontReady.then(paintName) // label()'s own font repaint would put the placeholder's size back
+    for (const b of beams) b.mat.color.copy(new Color(def.color).lerp(white, 0.6))
+    lastText = '' // the timer line may change too (all cars owned)
   }
   refresh()
+
   return {
     refresh,
-    update(dt) {
-      turn.rotation.y += dt * 0.5
+    // The claim: rings, a spark burst, confetti and a column of light.
+    burst() {
+      const cols = [color, '#ffd21a', '#ffffff']
+      fx.ring(x, 0.6, z, '#ffd21a', 12, 0.9, true)
+      fx.ring(x, 0.6, z, color, 7, 0.6, true)
+      fx.ring(x, 2.5, z, '#ffffff', 6, 0.7, false)
+      fx.sparks(x, 2, z, 140, cols, 14, 1.2, 0.8, -8)
+      fx.confetti(x, 3, z, 200, ['#ffd21a', '#ff4fb8', '#2ae8ff', '#7dff5a', '#ffffff', color], 14)
+      for (let i = 0; i < 70; i++) {
+        const a = Math.random() * Math.PI * 2
+        const r = Math.random() * 1.2
+        fx.glow({ x: x + Math.cos(a) * r, y: 0.6 + Math.random() * 2, z: z + Math.sin(a) * r, vx: 0, vy: 10 + Math.random() * 14, vz: 0, life: 1.4, size: 1, sizeEnd: 0.1, color: cols[i % 3], drag: 0.6, gravity: 0 })
+      }
+      flash = 1
+    },
+    update(dt, elapsed) {
+      const owned = !giftCar()
+      const cd = giftLeft()
+      const ready = !owned && cd === 0
+      const txt = owned ? 'ALL CARS OWNED!' : !chestState.known ? '· · ·' : cd < 0 ? 'SIGN IN TO EARN' : ready ? 'READY! DRIVE IN' : `${Math.floor(cd / 60)}:${String(Math.floor(cd % 60)).padStart(2, '0')}`
+      if (txt !== lastText) {
+        lastText = txt
+        relabel(timer, txt, 1.3, { color: ready || owned ? '#7dff5a' : cd < 0 ? '#ffb31a' : '#ffffff' })
+      }
+      const k = owned ? 1 : giftProgress()
+      const pct = Math.round(k * 200) / 2
+      if (pct !== arcPct) {
+        arcPct = pct
+        arc.geometry.dispose()
+        arc.geometry = new RingGeometry(R0, R1, 64, 1, Math.PI / 2, Math.max(0.001, k * Math.PI * 2))
+        arc.visible = k > 0.002
+      }
+
+      // The car: turns, pops in when new, lifts off and spins when ready.
+      popT = Math.min(1, popT + dt * 1.6)
+      const pop = popT < 1 ? popT + Math.sin(popT * Math.PI) * 0.3 : 1
+      turn.scale.setScalar(Math.max(0.05, pop))
+      const lift = ready ? 1.3 + Math.sin(elapsed * 2.4) * 0.25 : 0
+      turn.position.y += (0.5 + lift - turn.position.y) * Math.min(1, dt * 3)
+      turn.rotation.y += dt * (ready ? 1.8 : 0.5)
+      title.position.y = 8.2 + Math.sin(elapsed * 2) * 0.2
+      setNeonLevel(rim, ready ? 3 + Math.round(Math.sin(elapsed * 8) * 3) / 2 : 3)
+
+      // Beams sweep; brighter as the ring fills, flaring after a claim.
+      flash = Math.max(0, flash - dt * 0.8)
+      const op = 0.05 + k * 0.08 + (ready ? 0.1 : 0) + flash * 0.4
+      for (const b of beams) {
+        const t = elapsed * (ready ? 1.3 : 0.6) + b.phase
+        b.pivot.rotation.z = -b.lean * (0.25 + Math.sin(t) * 0.2)
+        b.pivot.rotation.x = Math.cos(t * 0.8) * 0.3
+        b.mat.opacity = op
+      }
+
+      // Sparkles rising off the ring (more as it fills), a gold fountain when ready.
+      sparkT -= dt
+      if (sparkT <= 0) {
+        sparkT = ready ? 0.025 : 0.2 - k * 0.14
+        const a = Math.random() * Math.PI * 2
+        const r = (R0 + R1) / 2
+        fx.glow({ x: x + Math.cos(a) * r, y: 0.7, z: z + Math.sin(a) * r, vx: -Math.sin(a) * 0.8, vy: 1.5 + Math.random() * 2 + k * 2, vz: Math.cos(a) * 0.8, life: 1.6, size: 0.45, sizeEnd: 0.05, color: Math.random() < 0.6 ? color : '#ffffff', drag: 0.4, gravity: 0 })
+        if (ready) {
+          const s = 2.5 + Math.random() * 2
+          fx.glow({ x, y: 1, z, vx: Math.cos(a) * s, vy: 9 + Math.random() * 4, vz: Math.sin(a) * s, life: 1.3, size: 0.6, sizeEnd: 0.1, color: Math.random() < 0.5 ? '#ffd21a' : '#ffffff', drag: 0.8, gravity: -9 })
+        }
+      }
     },
   }
 }

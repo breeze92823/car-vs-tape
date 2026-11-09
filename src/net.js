@@ -8,7 +8,7 @@
 // Never throws and never blocks play.
 import { Client } from '@colyseus/sdk'
 import { DEV_MODE, GAME_SLUG, NET, SERVER_URL } from './config.js'
-import { authState, canResolveServer, getPfp, launchRoomId, locateRoom, reportPlayer, resolveServerEndpoint, subscribeAuth, updateRoom } from './bloxity.js'
+import { authState, canResolveServer, getEquippedAvatar, getPfp, getProportions, getSkinTextureUrl, launchRoomId, locateRoom, reportPlayer, resolveServerEndpoint, subscribeAuth, updateRoom } from './bloxity.js'
 import { car } from './car.js'
 import * as game from './game.js'
 
@@ -64,15 +64,48 @@ export function saveNow() {
   serverSave()
 }
 
-// --- Presence (relayed through the roster; not drawn yet) ----------------------------
+// --- Presence (relayed through the roster, drawn by remotes.js) ----------------------
+// Bits of the pose `flags` (backend WorldState): what the car is doing, for the others' lights, smoke and driver.
+export const POSE_FLAGS = { braking: 1, drifting: 2, handbrake: 4, pad: 8, boosted: 16, stunned: 32 }
 let sentPose = ''
 let sentLoadout = ''
+let sentAvatar = ''
 function sendPose() {
   if (!net.connected) return
   const r = (n) => Math.round(n * 100) / 100
   const p = car.position
-  const key = JSON.stringify({ x: r(p.x), y: r(p.y), z: r(p.z), yaw: r(car.yaw), speed: r(Math.abs(car.wheelSpeed)) })
+  const flags =
+    (car.braking ? POSE_FLAGS.braking : 0) |
+    (car.drifting ? POSE_FLAGS.drifting : 0) |
+    (car.handbrake ? POSE_FLAGS.handbrake : 0) |
+    (car.pad ? POSE_FLAGS.pad : 0) |
+    (game.boostLeft() > 0 ? POSE_FLAGS.boosted : 0) |
+    (car.stun > 0 ? POSE_FLAGS.stunned : 0)
+  const key = JSON.stringify({ x: r(p.x), y: r(p.y), z: r(p.z), yaw: r(car.yaw), speed: r(car.wheelSpeed), steer: r(car.steer), thr: r(car.throttle), flags })
   if (key !== sentPose) send('pose', JSON.parse((sentPose = key)))
+}
+// The Bloxity avatar this player wears (equipped items, proportions, composed skin): the others dress the
+// same avatar in their copy of this car's seat.
+function avatarPayload() {
+  return { equipped: getEquippedAvatar(), proportions: getProportions(), skin: getSkinTextureUrl() || '' }
+}
+function sendAvatar() {
+  if (!net.connected) return
+  const payload = avatarPayload()
+  const key = JSON.stringify(payload)
+  if (key !== sentAvatar) send('avatar', JSON.parse((sentAvatar = key)))
+}
+// The driver's gesture, for the others' copy: 1 cheer, 2 wave, 3 honk.
+export function sendEmote(kind) {
+  if (net.connected) send('emote', { kind })
+}
+game.on('wins', (n) => n > 0 && sendEmote(1))
+for (const ev of ['car', 'levelup', 'rebirth']) game.on(ev, () => sendEmote(2))
+// The other players: { has, forEach((state, sessionId)), self } over the server's roster, or null offline.
+export function roster() {
+  const players = net.connected ? net.room?.state?.players : null
+  if (!players?.forEach) return null
+  return { has: (id) => players.has(id), forEach: (fn) => players.forEach(fn), self: net.room.sessionId }
 }
 function sendLoadout() {
   if (!net.connected) return
@@ -117,7 +150,23 @@ export function claimChest() {
     send('claimChest', {})
   })
 }
-// The chest clock only runs while the game is on screen.
+// The Free Car podium: same server clock rules. id = game.giftCar().id. Resolves { ok, reason? }:
+// reason as claimChest, plus 'owned' (that car was already gifted) and 'bad'.
+let carWaiting = null
+export function claimCar(id) {
+  if (!net.connected) return Promise.resolve({ ok: false, reason: 'offline' })
+  return new Promise((resolve) => {
+    carWaiting?.({ ok: false, reason: 'offline' })
+    const timer = setTimeout(() => carWaiting?.({ ok: false, reason: 'offline' }), 8000)
+    carWaiting = (r) => {
+      clearTimeout(timer)
+      carWaiting = null
+      resolve(r)
+    }
+    send('claimCar', { car: id })
+  })
+}
+// The reward clocks only run while the game is on screen.
 const playing = () => !document.hidden
 function sendPlayActive() {
   if (!net.connected) return
@@ -156,6 +205,10 @@ function attach(room) {
   room.onMessage('chestResult', (r) => {
     game.setChest(r, r?.active === true)
     chestWaiting?.({ ok: r?.ok === true, reason: typeof r?.reason === 'string' ? r.reason : '' })
+  })
+  room.onMessage('carResult', (r) => {
+    game.setChest(r, r?.active === true)
+    carWaiting?.({ ok: r?.ok === true, reason: typeof r?.reason === 'string' ? r.reason : '' })
   })
   room.onMessage('leaderboard', (data) => {
     net.boards = data
@@ -205,7 +258,9 @@ async function connect() {
     sentId = id.userId
     sentPose = ''
     sentLoadout = JSON.stringify({ car: game.state.car, level: game.state.level })
-    const options = { ...id, pfp: getPfp(), loadout: JSON.parse(sentLoadout) }
+    const avatar = avatarPayload()
+    sentAvatar = JSON.stringify(avatar)
+    const options = { ...id, pfp: getPfp(), loadout: JSON.parse(sentLoadout), avatar }
     const { room, relay } = (await joinLaunchRoom(options)) ?? (await joinAnyRoom(options))
     retryIn = NET.retry
     attach(room)
@@ -240,6 +295,7 @@ setInterval(() => {
   if (!document.hidden) saveNow()
 }, NET.saveEvery * 1000)
 setInterval(sendPose, 1000 / NET.poseHz)
+setInterval(sendAvatar, 1000)
 setInterval(announcePlayers, 1000)
 
 // setLeaderboard(data): town.js's boards, { boards: { power|wins|rebirths: [{ name, value }] }, ranks }.

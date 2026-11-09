@@ -3,6 +3,8 @@ import {
   BoxGeometry,
   BufferGeometry,
   CanvasTexture,
+  Color,
+  ConeGeometry,
   CylinderGeometry,
   DoubleSide,
   ExtrudeGeometry,
@@ -18,6 +20,7 @@ import {
   RepeatWrapping,
   Shape,
   ShapeGeometry,
+  ShaderMaterial,
   Sprite,
   SpriteMaterial,
   SRGBColorSpace,
@@ -148,8 +151,87 @@ function textures() {
     }),
     // Tyre sidewall: a lighter ring of lettering-like dashes on rubber.
     flare: new CanvasTexture(paintSoftDot(128)),
+    // Carbon fibre: a 2x2 twill of light/dark tows.
+    carbon: canvasTex(32, 32, (ctx) => {
+      for (let y = 0; y < 8; y++) for (let x = 0; x < 8; x++) {
+        const up = (x + y) % 4 < 2
+        const g = ctx.createLinearGradient(x * 4, y * 4, x * 4 + (up ? 0 : 4), y * 4 + (up ? 4 : 0))
+        g.addColorStop(0, '#16171c')
+        g.addColorStop(0.5, up ? '#3a3d48' : '#2a2c34')
+        g.addColorStop(1, '#101115')
+        ctx.fillStyle = g
+        ctx.fillRect(x * 4, y * 4, 4, 4)
+      }
+    }, true),
   }
+  tex.carbon.repeat.set(5, 5)
   return tex
+}
+
+// --- Jet afterburner flame -------------------------------------------------------------
+// Two additive cones (a hot core inside a coloured plume), bright where the surface faces the
+// eye so the edges stay soft, with travelling shock diamonds and a flicker. The group's z scale
+// is the flame's length (1 = 1 m); car.js drives it from the throttle via userData.set.
+const FLAME_VERT = /* glsl */ `
+  varying vec2 vUv;
+  varying vec3 vN;
+  varying vec3 vV;
+  void main() {
+    vUv = uv;
+    vec4 mv = modelViewMatrix * vec4(position, 1.0);
+    vN = normalMatrix * normal;
+    vV = -mv.xyz;
+    gl_Position = projectionMatrix * mv;
+  }`
+const FLAME_FRAG = /* glsl */ `
+  uniform float uTime;
+  uniform float uPower;
+  uniform vec3 uHot;
+  uniform vec3 uCool;
+  uniform float uGain;
+  varying vec2 vUv;
+  varying vec3 vN;
+  varying vec3 vV;
+  void main() {
+    // pow() of a negative is NaN, which the bloom pass would smear into black blocks: clamp.
+    float t = clamp(vUv.y, 0.0, 1.0); // 1 at the nozzle, 0 at the tip
+    float face = pow(clamp(abs(dot(normalize(vN), normalize(vV))), 0.0, 1.0), 1.3);
+    float shock = 0.72 + 0.28 * sin((1.0 - t) * 26.0 - uTime * 48.0);
+    float flick = 0.86 + 0.14 * sin(uTime * 71.0 + vUv.x * 37.7);
+    float a = pow(t, 1.5) * face * shock * flick * uPower;
+    vec3 col = mix(uCool, uHot, smoothstep(0.55, 1.0, t)) * uGain;
+    gl_FragColor = vec4(col, a);
+  }`
+function makeFlame(r, hot, cool) {
+  const shared = { uTime: { value: 0 }, uPower: { value: 0.75 } }
+  const g = new Group()
+  for (const [rad, len, a, b, gain] of [[r, 1, hot, cool, 1.25], [r * 0.45, 0.5, '#ffffff', hot, 1.5]]) {
+    const geo = new CylinderGeometry(rad, rad * 0.12, len, 16, 1, true)
+    geo.translate(0, -len / 2, 0)
+    geo.rotateX(Math.PI / 2) // nozzle at z = 0, tip toward -z
+    const mat = new ShaderMaterial({
+      uniforms: { ...shared, uHot: { value: new Color(a) }, uCool: { value: new Color(b) }, uGain: { value: gain } },
+      vertexShader: FLAME_VERT,
+      fragmentShader: FLAME_FRAG,
+      transparent: true,
+      depthWrite: false,
+      blending: AdditiveBlending,
+      side: DoubleSide,
+    })
+    mat.userData.noShadow = true
+    const m = new Mesh(geo, mat)
+    m.renderOrder = 6
+    m.frustumCulled = false
+    g.add(m)
+  }
+  g.scale.set(1, 1, 0.9)
+  g.userData.keep = true // kept out of the bake
+  g.userData.set = (time, power, len, width) => {
+    shared.uTime.value = time
+    shared.uPower.value = power
+    g.scale.set(width, width, len)
+  }
+  return g
 }
 
 const M = {
@@ -169,7 +251,11 @@ const M = {
   drl: neon('#e6f4ff', 5),
   reverse: neon('#ffffff', 1.1),
   amber: neon('#ffa21a', 2),
+  jet: new MeshStandardMaterial({ color: '#3b3f4a', roughness: 0.3, metalness: 0.9 }),
+  // Heat-tinted titanium round the nozzle exits.
+  titanium: new MeshStandardMaterial({ color: '#8f86c4', roughness: 0.22, metalness: 1 }),
 }
+let carbonMat = null
 // Glass casts no shadow: the cabin stays lit, so the driver is never left in the dark.
 M.window.userData.noShadow = true
 M.screen.userData.noShadow = true
@@ -464,7 +550,7 @@ function onFace(parent, t, v, front, geo, mat, x, proud = 0.025, depth = 0.1) {
 const rbox = (w, h, d, r) => (LO ? new BoxGeometry(w, h, d) : new RoundedBoxGeometry(w, h, d, 2, Math.min(r, w / 2 - 0.001, h / 2 - 0.001, d / 2 - 0.001)))
 
 // --- Wheels -------------------------------------------------------------------------------
-function makeWheel(t, side, rimMat, caliperMat) {
+function makeWheel(t, side, rimMat, caliperMat, glowMat = null) {
   const r = t.wheelR
   const w = t.tyreW
   const pivot = new Group()
@@ -502,6 +588,14 @@ function makeWheel(t, side, rimMat, caliperMat) {
   const lip = new Mesh(lipGeo, rimMat)
   lip.position.x = face
   spin.add(lip)
+  // Performance kit: a neon ring just inside the rim lip.
+  if (glowMat) {
+    const ringGeo = new TorusGeometry(rr * 0.9, 0.013, 4, seg(36, 16))
+    ringGeo.rotateY(Math.PI / 2)
+    const ring = new Mesh(ringGeo, glowMat)
+    ring.position.x = face - side * 0.004
+    spin.add(ring)
+  }
 
   const spoke = (a, len, wide, thick, offset = 0, twist = 0) => {
     const g = new BoxGeometry(thick, len, wide)
@@ -576,6 +670,13 @@ export function buildCar(def, opts = {}) {
   gridMat ??= new MeshStandardMaterial({ map: T.mesh, roughness: 0.6, metalness: 0.3 })
   plateMat ??= new MeshStandardMaterial({ map: T.plate, roughness: 0.5 })
   const flareMat = t.flares === 'black' ? M.black : paint
+  // Performance kit (config CARS kit 1..3): carbon aero, neon accents, jets.
+  const kit = def.kit ?? 0
+  const accent = def.accent ?? def.color
+  const [flameHot, flameCool] = def.flame ?? ['#bfeeff', '#ff7a1a']
+  const accentMat = kit ? (opts.lights ? neon(accent, 2.8) : cachedMat(`acc${accent}`, () => neon(accent, 2.8))) : null
+  carbonMat ??= new MeshPhysicalMaterial({ map: T.carbon, roughness: 0.35, metalness: 0.3, clearcoat: 1, clearcoatRoughness: 0.08 })
+  const aero = kit ? carbonMat : M.black // splitter, skirts, diffuser, wing
 
   // --- Cockpit layout ---
   // The cabin is hollow: two side walls (the pillars and window frames) under one glass
@@ -756,6 +857,26 @@ export function buildCar(def, opts = {}) {
     const fp = faceAt(t, h.v, true)
     headPos.push([x, h.v, fp.u + BEVEL + 0.15])
   }
+  if (kit) {
+    // Light bar joining the headlamps across the nose.
+    const inner = Math.abs(headPos[0][0]) - h.w / 2 - 0.04
+    onFace(body, t, h.v + h.h * 0.2, true, rbox(inner * 2, 0.024, 0.1, 0.01), accentMat, 0, 0.022)
+    // Hood vents on the bonnet slope.
+    const [a, b] = [t.body[3], t.body[4]]
+    if (a[0] > b[0] + 0.2) {
+      const u = (a[0] + b[0]) / 2
+      const tilt = Math.atan2(b[1] - a[1], a[0] - b[0])
+      const y = lineV(a, b, u, BEVEL)
+      for (const s of [-1, 1]) {
+        for (const [w, mat, dy] of [[0.3, aero, 0.006], [0.24, gridMat, 0.016]]) {
+          const v = box(body, w, 0.02, (a[0] - b[0]) * (w === 0.3 ? 0.62 : 0.52), mat, s * 0.36, y + dy, u, 0.008)
+          v.rotation.x = tilt
+        }
+        const edge = box(body, 0.24, 0.012, 0.012, accentMat, s * 0.36, lineV(a, b, u + (a[0] - b[0]) * 0.26, BEVEL) + 0.02, u + (a[0] - b[0]) * 0.26)
+        edge.rotation.x = tilt
+      }
+    }
+  }
   if (t.grille) {
     const g = t.grille
     onFace(body, t, g.v, true, rbox(g.w + 0.06, g.h + 0.06, 0.1, 0.035), M.trim, 0, 0.012)
@@ -785,7 +906,7 @@ export function buildCar(def, opts = {}) {
       onFace(body, t, tl.v - 0.06, false, rbox(0.3, tl.h * 2.2, 0.1, 0.02), tailMat, s * (bw / 2 - 0.16), 0.02)
       tailPos.push([s * (bw / 2 - 0.16), tl.v, f.u - BEVEL - 0.12])
     }
-    if (t.rearMesh) onFace(body, t, tl.v - 0.2, false, rbox(bw * 0.62, 0.2, 0.1, 0.03), gridMat, 0, 0.012)
+    if (t.rearMesh && !kit) onFace(body, t, tl.v - 0.2, false, rbox(bw * 0.62, 0.2, 0.1, 0.03), gridMat, 0, 0.012)
   } else {
     for (const s of [-1, 1]) {
       const f = faceAt(t, tl.v, false)
@@ -800,29 +921,97 @@ export function buildCar(def, opts = {}) {
     }
     if (tl.style === 'slim') onFace(body, t, tl.v, false, new BoxGeometry(Math.abs(tailPos[0][0]) * 2 - tl.w, 0.02, 0.1), tailMat, 0, 0.018)
   }
-  const ex = t.exhaust
-  const fe = faceAt(t, ex.v, false)
-  const pipe = new CylinderGeometry(ex.r, ex.r * 0.92, 0.26, 18, 1, true)
-  pipe.rotateX(Math.PI / 2)
-  const pipeIn = new CylinderGeometry(ex.r * 0.78, ex.r * 0.78, 0.02, 14)
-  pipeIn.rotateX(Math.PI / 2)
   const exhaustTips = []
-  for (const x of ex.xs) {
-    const z = fe.u - BEVEL - 0.02
-    const p = new Mesh(pipe, M.chrome)
-    p.position.set(x, ex.v, z)
-    body.add(p)
-    const d = new Mesh(pipeIn, M.black)
-    d.position.set(x, ex.v, z - 0.1)
-    body.add(d)
-    exhaustTips.push({ x, y: ex.v, z: z - 0.16 })
+  const jets = [] // { x, y, z (nozzle exit), r, flame }
+  if (kit) {
+    // Twin jet nozzles set into a carbon panel in the tail, in place of the exhausts.
+    const r = [0, 0.15, 0.175, 0.2][kit]
+    const jy = Math.max(t.exhaust.v, t.bottom + r + 0.14)
+    const fj = faceAt(t, jy, false)
+    const jx = Math.min(0.52, sideX(jy, fj.u) - r - 0.2)
+    onFace(body, t, jy, false, rbox(2 * (jx + r) + 0.16, 2 * r + 0.14, 0.1, 0.07), aero, 0, 0.012)
+    const L = 0.6
+    const exitZ = fj.u - BEVEL - 0.22
+    const shellGeo = new CylinderGeometry(r * 1.1, r, L, seg(28, 14), 1, true)
+    shellGeo.rotateX(Math.PI / 2) // wide end forward (inside the body), nozzle to the rear
+    const wallGeo = new CylinderGeometry(r * 0.8, r * 0.8, 0.3, seg(20, 10), 1, true)
+    wallGeo.rotateX(Math.PI / 2)
+    const lipGeo = new TorusGeometry(r * 0.9, r * 0.11, seg(8, 4), seg(28, 14))
+    const heatGeo = new TorusGeometry(r * 0.79, 0.012, 4, seg(28, 14))
+    const bandGeo = new TorusGeometry(r * 1.04, 0.018, 4, seg(28, 14))
+    const coreGeo = new CylinderGeometry(r * 0.8, r * 0.8, 0.01, seg(20, 10))
+    coreGeo.rotateX(Math.PI / 2)
+    const spinGeo = new ConeGeometry(r * 0.26, 0.14, 14)
+    spinGeo.rotateX(-Math.PI / 2) // point to the rear
+    const bladeGeo = new BoxGeometry(0.018, r * 0.56, 0.05)
+    bladeGeo.translate(0, r * 0.22 + r * 0.28, 0)
+    const coreMat = opts.lights ? neon(flameHot, 3.2) : cachedMat(`core${flameHot}`, () => neon(flameHot, 3.2))
+    const heatMat = cachedMat(`heat${flameCool}`, () => neon(flameCool, 2.4))
+    for (const s of [-1, 1]) {
+      const x = s * jx
+      const at = (geo, mat, z) => {
+        const m = new Mesh(geo, mat)
+        m.position.set(x, jy, z)
+        body.add(m)
+        return m
+      }
+      at(shellGeo, M.jet, exitZ + L / 2).castShadow = true
+      at(wallGeo, M.well, exitZ + 0.15)
+      at(lipGeo, M.titanium, exitZ)
+      at(heatGeo, heatMat, exitZ - 0.004)
+      at(bandGeo, paint, exitZ + 0.16)
+      if (kit >= 2) at(bandGeo, accentMat, exitZ + 0.26)
+      at(coreGeo, coreMat, exitZ + 0.28)
+      at(spinGeo, M.chrome, exitZ + 0.18)
+      // Turbine blades in front of the glowing core, so it shows through the gaps.
+      for (let i = 0; i < seg(11, 7); i++) {
+        const b = at(bladeGeo, M.trim, exitZ + 0.22)
+        b.rotation.order = 'ZYX'
+        b.rotation.set(0, 0.55, (i / seg(11, 7)) * Math.PI * 2)
+      }
+      let flame = null
+      if (!opts.static) {
+        flame = makeFlame(r * 0.82, flameHot, flameCool)
+        flame.position.set(x, jy, exitZ - 0.01)
+        body.add(flame)
+      }
+      jets.push({ x, y: jy, z: exitZ, r, flame })
+      exhaustTips.push({ x, y: jy, z: exitZ - 0.08 })
+    }
+  } else {
+    const ex = t.exhaust
+    const fe = faceAt(t, ex.v, false)
+    const pipe = new CylinderGeometry(ex.r, ex.r * 0.92, 0.26, 18, 1, true)
+    pipe.rotateX(Math.PI / 2)
+    const pipeIn = new CylinderGeometry(ex.r * 0.78, ex.r * 0.78, 0.02, 14)
+    pipeIn.rotateX(Math.PI / 2)
+    for (const x of ex.xs) {
+      const z = fe.u - BEVEL - 0.02
+      const p = new Mesh(pipe, M.chrome)
+      p.position.set(x, ex.v, z)
+      body.add(p)
+      const d = new Mesh(pipeIn, M.black)
+      d.position.set(x, ex.v, z - 0.1)
+      body.add(d)
+      exhaustTips.push({ x, y: ex.v, z: z - 0.16 })
+    }
   }
   const rearU = t.body[t.body.length - 2][0]
-  box(body, W * 0.78, 0.08, 0.34, M.black, 0, t.bottom + 0.05, rearU + 0.1)
+  box(body, W * 0.78, 0.08, 0.34, aero, 0, t.bottom + 0.05, rearU + 0.1)
   if (t.fins) for (let i = -2; i <= 2; i++) box(body, 0.025, 0.2, 0.4, M.trim, i * 0.22, t.bottom + 0.12, rearU + 0.1)
   // Front lip under the nose.
   const frontU = t.body[1][0]
-  box(body, W * 0.8 * (1 - t.endK * 0.6), 0.04, 0.3, M.trim, 0, t.bottom + 0.02, frontU - 0.12)
+  box(body, W * 0.8 * (1 - t.endK * 0.6), 0.04, 0.3, kit ? aero : M.trim, 0, t.bottom + 0.02, frontU - 0.12)
+  if (kit) {
+    // Splitter edge light + canards on the front corners.
+    box(body, W * 0.8 * (1 - t.endK * 0.6) * 0.96, 0.014, 0.014, accentMat, 0, t.bottom + 0.035, frontU + 0.03)
+    for (const s of [-1, 1]) {
+      const v = 0.42
+      const f = faceAt(t, v, true)
+      const can = box(body, 0.22, 0.025, 0.2, aero, s * (sideX(v, f.u - 0.15) - 0.02), v, f.u - 0.08, 0.008)
+      can.rotation.set(0, s * 0.35, s * 0.18)
+    }
+  }
 
   // --- Sides: arch flares, skirts, seams, handles, mirrors, intakes ---
   const R = t.wheelR + ARCH_GAP - BEVEL
@@ -851,7 +1040,8 @@ export function buildCar(def, opts = {}) {
   const doorBack = t.seats === 'two' ? c[c.length - 1][0] + 0.45 : pillarU - 0.85
   for (const s of [-1, 1]) {
     const mid = (skirtA + skirtB) / 2
-    box(body, 0.06, 0.1, skirtB - skirtA, M.black, s * (sideX(skirtY, mid) + 0.025), skirtY, mid, 0.02)
+    box(body, 0.06, 0.1, skirtB - skirtA, aero, s * (sideX(skirtY, mid) + 0.025), skirtY, mid, 0.02)
+    if (kit) box(body, 0.016, 0.022, (skirtB - skirtA) * 0.9, accentMat, s * (sideX(skirtY, mid) + 0.058), skirtY + 0.018, mid)
     // Door seams + handle, laid on the side surface.
     for (const z of [doorFront, doorBack]) box(body, 0.012, beltY - t.bottom - 0.3, 0.014, M.trim, s * (sideX(0.7, z) + BEVEL * 0.8), (beltY + t.bottom) / 2 + 0.04, z)
     box(body, 0.016, beltY - 0.06 - (t.bottom + 0.18), 0.014, M.trim, s * (sideX(0.7, (doorFront + doorBack) / 2) + BEVEL * 0.8), (beltY + t.bottom) / 2 + 0.04, t.seats === 'two' ? doorBack - 0.01 : pillarU + 0.02)
@@ -883,17 +1073,27 @@ export function buildCar(def, opts = {}) {
     const rearTop = t.body[t.deck + 1]
     const wz = rearTop[0] + 0.32
     const deckY = deck[1] + (rearTop[1] - deck[1]) * 0.8 + BEVEL
-    const wy = deckY + (big ? 0.34 : 0.28)
-    const wing = box(body, W * (big ? 0.9 : 0.82), 0.05, big ? 0.36 : 0.3, big ? M.black : paint, 0, wy, wz, 0.02)
+    const wy = deckY + (big ? 0.34 : 0.28) + (kit ? 0.06 : 0)
+    const span = W * (big ? 0.9 : 0.82)
+    const chord = big ? 0.36 : 0.3
+    const wing = box(body, span, 0.05, chord, big || kit ? aero : paint, 0, wy, wz, 0.02)
     wing.rotation.x = -0.12
+    if (kit) {
+      // Gurney flap in the body colour + a neon trailing edge.
+      box(wing, span * 0.98, 0.07, 0.025, paint, 0, 0.05, -chord / 2 + 0.012)
+      box(wing, span * 0.94, 0.016, 0.016, accentMat, 0, 0.09, -chord / 2 + 0.012)
+    }
     for (const s of [-1, 1]) {
-      box(body, 0.05, wy - deckY + 0.04, 0.12, M.black, s * W * 0.27, (wy + deckY) / 2, wz + 0.04)
-      if (big) box(body, 0.03, 0.2, 0.42, paint, s * W * 0.45, wy + 0.03, wz, 0.01)
+      // Swan-neck struts stand inboard of the jets on kit cars.
+      box(body, 0.05, wy - deckY + 0.04, 0.12, M.black, s * W * (kit ? 0.16 : 0.27), (wy + deckY) / 2, wz + 0.04)
+      if (big || kit) box(body, 0.03, 0.22, chord + 0.08, paint, s * span * 0.5, wy + 0.03, wz, 0.01)
+      if (kit >= 2) box(body, 0.012, 0.012, chord + 0.04, accentMat, s * (span * 0.5 + 0.016), wy + 0.13, wz)
     }
   }
   if (t.fins) {
     box(body, 0.3, 0.12, 0.42, gridMat, 0, c[2][1] + 0.1, c[2][0] - 0.12, 0.05) // roof scoop, behind the driver's head
     box(body, 0.03, 0.17, 0.9, paint, 0, c[2][1] - 0.02, c[2][0] - 0.55, 0.01)
+    if (kit >= 3) box(body, 0.036, 0.016, 0.86, accentMat, 0, c[2][1] + 0.07, c[2][0] - 0.55)
   }
   if (t.antenna) {
     const ant = box(body, 0.012, 0.32, 0.012, M.black, 0, c[2][1] + 0.18, c[2][0] - 0.05)
@@ -915,7 +1115,7 @@ export function buildCar(def, opts = {}) {
   const wx = half - t.tyreW / 2 + 0.03
   for (const [z, front] of [[t.frontAxle, true], [t.rearAxle, false]]) {
     for (const s of [-1, 1]) {
-      const wh = makeWheel(t, s, rimMat, caliperMat)
+      const wh = makeWheel(t, s, rimMat, caliperMat, kit >= 2 ? accentMat : null)
       wh.pivot.position.set(s * wx, t.wheelR, z)
       root.add(wh.pivot)
       wheels.push({ ...wh, front, side: s })
@@ -943,8 +1143,9 @@ export function buildCar(def, opts = {}) {
     })
   }
   let under = null
+  const glowColor = def.glow ?? (kit ? accent : def.color)
   if (!opts.static) {
-    under = new Mesh(new PlaneGeometry(W * 1.9, 5.6), new MeshBasicMaterial({ map: T.flare, color: def.glow ?? def.color, blending: AdditiveBlending, transparent: true, depthWrite: false, opacity: opts.lights ? 0.55 : 0.35, toneMapped: false }))
+    under = new Mesh(new PlaneGeometry(W * 1.9, 5.6), new MeshBasicMaterial({ map: T.flare, color: glowColor, blending: AdditiveBlending, transparent: true, depthWrite: false, opacity: opts.lights ? 0.55 : 0.35, toneMapped: false }))
     under.rotation.x = -Math.PI / 2
     under.position.y = 0.04
     under.renderOrder = 3
@@ -959,7 +1160,8 @@ export function buildCar(def, opts = {}) {
     for (const m of [...merged.children]) root.add(m)
     root.traverse((o) => o.isMesh && (o.receiveShadow = true))
   } else {
-    const keep = body.children.filter((o) => o.isSprite)
+    const keep = body.children.filter((o) => o.isSprite || o.userData.keep) // flares, jet flames
+    for (const o of keep) body.remove(o)
     body.remove(steering.pivot) // turns: kept out of the bake
     const merged = bake(body, true)
     body.clear()
@@ -985,6 +1187,13 @@ export function buildCar(def, opts = {}) {
     flares,
     under,
     exhaustTips,
+    jets,
+    kit,
+    accent,
+    accentMat,
+    glowColor,
+    flameColor: flameCool,
+    trailPoints: tailPos,
     paint,
     dashMat,
     steering: opts.static ? null : steering,

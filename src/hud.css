@@ -39,42 +39,23 @@
   text-shadow: 0 0.08em 0 var(--ink);
 }
 
-/* --- Top row: Auto Drive + boost chip ------------------------------------------ */
+/* --- Top row: boost chip ------------------------------------------ */
 .hud-top {
   position: absolute;
   top: calc(var(--safe-t) + 10px);
   left: 50%;
   transform: translateX(-50%);
+  /* left: 50% would cap a shrink-to-fit row at half the screen and squeeze the chips on phones. */
+  width: max-content;
+  max-width: calc(100vw - 16px);
   display: flex;
   gap: clamp(6px, 1.5vw, 16px);
   align-items: center;
 }
-.auto-btn {
-  position: relative;
-  padding: 0.35em 0.9em 0.4em;
-  font-size: clamp(16px, 3.4vmin, 32px);
-  border-radius: 14px;
-  background: repeating-linear-gradient(135deg, #ff3b3b 0 14px, #ff5a2a 14px 28px);
-  box-shadow: inset 0 -5px 0 rgba(0, 0, 0, 0.25), 0 0 0 4px var(--ink), 0 6px 0 4px rgba(11, 26, 58, 0.45);
-  transition: transform 0.08s;
-}
-.auto-btn:active {
-  transform: translateY(2px) scale(0.98);
-}
-.auto-btn.on {
-  background: repeating-linear-gradient(135deg, #20d44a 0 14px, #3ae86a 14px 28px);
-}
-.auto-btn .tag {
-  position: absolute;
-  top: -0.7em;
-  right: -0.6em;
-  font-size: 0.6em;
-  padding: 0.05em 0.35em;
-  background: var(--ink);
-  border-radius: 8px;
-}
 .boost-chip {
   display: none;
+  flex: none;
+  white-space: nowrap;
   align-items: center;
   gap: 0.3em;
   padding: 0.3em 0.7em;
@@ -90,6 +71,7 @@
 /* Free Boost chest: an hour of play (signed in) opens it. Bar = progress through the hour. */
 .chest-chip {
   display: none;
+  flex: none;
   position: relative;
   overflow: hidden;
   align-items: center;
@@ -128,6 +110,16 @@
   background: linear-gradient(90deg, #2fc14a, #7dff5a);
   box-shadow: 0 0 0 4px var(--ink), 0 0 22px rgba(125, 255, 90, 0.8);
   animation: pulse 1s ease-in-out infinite;
+}
+.gift-chip svg {
+  width: 2.1em;
+}
+.gift-chip i {
+  background: #ffd21a;
+}
+.gift-chip.ready {
+  background: linear-gradient(90deg, #ff8a14, #ffd21a);
+  box-shadow: 0 0 0 4px var(--ink), 0 0 22px rgba(255, 210, 26, 0.85);
 }
 .chest-chip.guest {
   background: linear-gradient(90deg, #ff8a14, #ffb31a);
@@ -609,6 +601,62 @@
 }
 .touch-ui .prompt {
   bottom: calc(var(--safe-b) + clamp(120px, 24vmin, 200px));
+}
+
+/* Touch + HUD off: only the Settings tile remains, so show it directly (no MENU fold). */
+.touch-ui #hud.hud-off .tiles {
+  display: grid;
+}
+.touch-ui #hud.hud-off .menu-btn {
+  display: none !important;
+}
+
+/* Touch: a MENU button folds the tile grid away; the next-tape card shrinks to the top-right corner. */
+.menu-btn {
+  display: none;
+  background: linear-gradient(135deg, #ffe14a, #ff9a12);
+}
+.touch-ui .menu-btn {
+  display: block;
+  width: calc(var(--tile) * 0.8);
+  height: calc(var(--tile) * 0.8);
+}
+.touch-ui .menu-btn svg {
+  inset: 12% 14% 30%;
+}
+.touch-ui .tiles {
+  display: none;
+}
+.touch-ui #hud.menu-open .tiles {
+  display: grid;
+}
+.touch-ui #hud.menu-open .menu-btn {
+  background: linear-gradient(135deg, #a7b0c8, #5b6480);
+}
+.touch-ui .hud-right {
+  top: calc(var(--safe-t) + 64px);
+  transform: none;
+  width: clamp(92px, 24vmin, 124px);
+  padding: 4px 6px 6px;
+  border-radius: 12px;
+  font-size: clamp(9px, 2.4vmin, 12px);
+}
+.touch-ui .hud-right .need {
+  font-size: 1.35em;
+  margin: 0;
+}
+.touch-ui .hud-right .bar {
+  height: 8px;
+  margin-top: 3px;
+}
+.touch-ui .hud-right .pay {
+  display: none;
+}
+@media (max-width: 480px) {
+  .touch-ui .hud-right {
+    top: calc(var(--safe-t) + var(--res-top-h) + 44px);
+    right: calc(var(--safe-r) + 8px);
+  }
 }
 
 /* HUD switched off in Settings: keep only the Settings tile. */
