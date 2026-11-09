@@ -143,6 +143,8 @@ function step(dt) {
     car.stun -= dt
     throttle = 0
   }
+  // On a treadmill the car trains by itself; S / handbrake still lets you off.
+  if (car.pad && car.stun <= 0 && !handbrake && throttle > -0.05) throttle = 1
   car.throttle = throttle
   car.steer = steer
   car.handbrake = handbrake
@@ -245,16 +247,16 @@ function step(dt) {
 
   // Never sink: ray down from above the car at the nose, middle and tail; if the
   // ground is higher than the car's feet, lift the car onto it.
-  let top = -Infinity
+  let groundTop = -Infinity
   for (const o of [-HALF, 0, HALF]) {
     const rx0 = next.x + Math.sin(car.yaw) * o
     const rz0 = next.z + Math.cos(car.yaw) * o
     const ray = new RAPIER.Ray({ x: rx0, y: next.y + 2, z: rz0 }, { x: 0, y: -1, z: 0 })
     const hit = world.castRay(ray, 6, true, RAPIER.QueryFilterFlags.EXCLUDE_SENSORS, undefined, collider)
-    if (hit) top = Math.max(top, next.y + 2 - hit.timeOfImpact)
+    if (hit) groundTop = Math.max(groundTop, next.y + 2 - hit.timeOfImpact)
   }
-  if (top > next.y + 0.001 && top - next.y < 1.5) {
-    next.y = top
+  if (groundTop > next.y + 0.001 && groundTop - next.y < 1.5) {
+    next.y = groundTop
     if (v.y < 0) v.y = 0
     car.grounded = true
   }
