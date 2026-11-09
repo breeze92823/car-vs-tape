@@ -11,7 +11,8 @@ import { createPostFx } from './postfx.js'
 import { label, relabel, setNeonBloom } from './propkit.js'
 import { createFx } from './fx.js'
 import { car, createCarBody, createCarView, interpolate, setPads, teleportCar } from './car.js'
-import { setCameraDriver, setCameraSensitivity, shakeCamera, snapCamera, toggleCockpit, updateCamera } from './carcam.js'
+import { playIntro, setCameraDriver, setCameraSensitivity, shakeCamera, snapCamera, toggleCockpit, updateCamera } from './carcam.js'
+import { atMost, breathe, reveal, step, warm } from './boot.js'
 import { buildTown } from './town.js'
 import { buildTrack } from './track.js'
 import { buildCar } from './carmodel.js'
@@ -75,20 +76,22 @@ window.addEventListener('resize', resize)
 resize()
 
 // --- World ----------------------------------------------------------------------
-bloxity.loadingStep('Starting physics')
+step('Starting physics')
 await initPhysics()
 lighting = createLighting(scene, renderer, preset)
 fx = createFx(scene, preset.particles)
 for (const key of Object.keys(bloxity.settings)) applySetting(key, bloxity.settings[key])
 fx.setBloom(preset.bloom)
 
-bloxity.loadingStep('Building the town')
+step('Building the town')
+await breathe() // paint the step before the (synchronous) build
 buildGround(scene)
 createCarBody()
 const carView = createCarView(scene, fx, preset)
 const rocket = createRocket({ carView, fx, scene }) // Shift / BOOST: a charged burst past top speed; Space / FLY on the Tesla Roadster
 setRocketSource(rocket) // relayed to the other players (pose flags rocket / flying)
-const shopView = createShopView({ renderer, envScene: scene, driver: carView.driver, quality: preset.particles }) // live jet-car pictures in the Car Shop
+// Live jet-car pictures in the Car Shop; it reuses the cars the thumbnails built (makeThumbnails).
+const shopView = createShopView({ renderer, envScene: scene, driver: carView.driver, quality: preset.particles, reuse: (def) => takeThumbCar(def.id) })
 carView.setCar(game.carLook())
 setCameraDriver(carView.driver) // the cockpit view sits at the driver's eyes
 const remotes = createRemotes({ scene, fx, preset }) // the other players' cars, avatars and name plates
@@ -396,7 +399,16 @@ installTouch({ day: () => lighting.toggleDayNight(), horn: honk, view: toggleCoc
 
 // --- Car shop thumbnails: rendered once with the game's own renderer -------------------------
 // Each car has the player's avatar at the wheel, waving (waits up to 2.5 s for it to load).
+// Built during the loading screen; the jet cars are kept for shopView's live pictures, so each
+// car is built once.
 let thumbPromise = null
+let onThumb = null // (done 0..1) while the loading screen waits on the thumbnails
+const thumbCars = new Map()
+function takeThumbCar(id) {
+  const parts = thumbCars.get(id)
+  thumbCars.delete(id)
+  return parts
+}
 function makeThumbnails() {
   const avatar = Promise.race([carView.driver.whenLoaded, new Promise((r) => setTimeout(r, 2500))])
   thumbPromise ??= avatar.then(() => new Promise((resolve) => {
@@ -438,6 +450,8 @@ function makeThumbnails() {
         ctx.drawImage(renderer.domElement, 0, fullH - H * dpr, W * dpr, H * dpr, 0, 0, W, H)
         out[def.id] = c2.toDataURL('image/png')
         ts.remove(m)
+        if (def.kit || def.thrusters) thumbCars.set(def.id, parts)
+        onThumb?.(idx / CARS.length)
         renderer.setScissorTest(false)
         renderer.setViewport(0, 0, window.innerWidth, window.innerHeight)
         requestAnimationFrame(step)
@@ -450,7 +464,8 @@ function makeThumbnails() {
 
 // --- Loop ---------------------------------------------------------------------------------
 const clock = new Clock()
-let shownLoading = true
+let revealed = false
+let bootFrames = 0
 let readySince = 0
 let popupT = 0
 let night = 0
@@ -533,17 +548,39 @@ function frame() {
   shopView.render(rawDt, elapsed) // before the main render: it borrows the canvas's corner
   postfx.render(windowOpen)
 
-  if (shownLoading) {
+  // A few real frames behind the loading screen, then lift it and play the intro swing.
+  if (!revealed) {
     readySince += rawDt
-    if (readySince > 0.3) {
-      shownLoading = false
-      bloxity.notifyFirstFrame()
+    if (++bootFrames >= 5 && readySince > 0.25) {
+      revealed = true
+      reveal()
+      playIntro()
     }
   }
 }
+
+// --- Warm-up behind the loading screen --------------------------------------------------------
+// Everything the first seconds of play would otherwise stall on: the avatar, every shader (both
+// render paths: bloom and the plain one used behind windows), every mesh/texture upload, and the
+// Car Shop's pictures and live cars. Each wait is capped, so a slow step never blocks the game.
+step('Seating your driver')
+await atMost(carView.driver.whenLoaded, 4000)
+step('Preparing graphics')
+await breathe()
+await warm(renderer, scene, camera, [() => postfx.render(false), () => postfx.render(true)])
+step('Polishing the cars')
+onThumb = (k) => step(`Polishing the cars ${Math.round(k * 100)}%`)
+const thumbsDone = await atMost(makeThumbnails().then(() => true), 10000)
+onThumb = null
+if (thumbsDone) {
+  step('Fuelling the jets')
+  await breathe()
+  await shopView.prewarmNow()
+} else {
+  makeThumbnails().then(() => setTimeout(() => shopView.prewarm(), 2000)) // finish in the background
+}
+step('Starting engines')
 renderer.setAnimationLoop(frame)
-// Warm the Car Shop in the background (pictures, live cars, shaders) so it opens instantly.
-setTimeout(() => makeThumbnails().then(() => setTimeout(() => shopView.prewarm(), 500)), 5000)
 
 window.addEventListener('beforeunload', () => {
   game.save()

@@ -170,19 +170,8 @@ body.gw-open .rk-hud {
   75% { transform: translateX(4px); }
 }
 
-/* Touch: BOOST on the cluster's top row left of HORN, FLY above it (clear of the power readout
-   and level bar under the cluster); same cyan rings. */
-.touch-cluster .touch-btn.boost {
-  left: calc(-1 * var(--side) - 12px);
-  top: 0;
-  bottom: auto;
-}
-.touch-cluster .touch-btn.fly {
-  left: calc(-1 * var(--side) - 12px);
-  top: calc(-1 * var(--side) - 12px);
-  width: var(--side);
-  height: var(--side);
-}
+/* Touch (touch.js): BOOST / FLY are round action buttons above the pedals with the same cyan rings;
+   FLY shows only on a car that flies. */
 body:not(.rk-canfly) .touch-btn.fly {
   display: none;
 }

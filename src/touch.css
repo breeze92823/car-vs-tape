@@ -1,4 +1,6 @@
-/* Touch controls (touch.js). Hidden unless body.touch-ui. */
+/* Touch controls (touch.js). Hidden unless body.touch-ui.
+   Layout: steering pad bottom-left (left thumb), BRAKE + GAS pedals bottom-right (right thumb),
+   action buttons above the pedals, the rest of the screen looks around. */
 .touch-root {
   display: none;
   position: fixed;
@@ -6,10 +8,14 @@
   z-index: 10;
   pointer-events: none;
   font-family: 'Fredoka', system-ui, sans-serif;
-  --pad: clamp(12px, 3vmin, 24px);
+  --pad: clamp(10px, 2.6vmin, 22px);
+  --gap: clamp(6px, 1.6vmin, 12px);
+  --steer: clamp(62px, 18vmin, 96px);
+  --pedal: clamp(58px, 16vmin, 84px);
+  --pedal-h: calc(var(--pedal) * 1.3);
+  --act: clamp(46px, 12.5vmin, 62px);
   --safe-l: env(safe-area-inset-left, 0px);
   --safe-r: env(safe-area-inset-right, 0px);
-  --safe-t: env(safe-area-inset-top, 0px);
   --safe-b: env(safe-area-inset-bottom, 0px);
 }
 .touch-ui .touch-root {
@@ -23,132 +29,136 @@
   -webkit-tap-highlight-color: transparent;
 }
 
-/* --- Zones: the edges steer, the middle looks ---------------------------------- */
-.touch-zone {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  pointer-events: auto;
-}
-.touch-steer {
-  width: 22%;
-  display: flex;
-  align-items: center;
-  background: rgba(255, 255, 255, 0.04);
-  transition: background 0.1s;
-}
-.touch-steer-l {
-  left: 0;
-  justify-content: flex-start;
-  padding-left: calc(var(--safe-l) + 8px);
-  border-right: 2px solid rgba(255, 255, 255, 0.18);
-}
-.touch-steer-r {
-  right: 0;
-  justify-content: flex-end;
-  padding-right: calc(var(--safe-r) + 8px);
-  border-left: 2px solid rgba(255, 255, 255, 0.18);
-}
-.touch-steer.active {
-  background: rgba(255, 196, 64, 0.22);
-}
-.steer-arrow {
-  font-size: clamp(48px, 14vmin, 90px);
-  line-height: 1;
-  color: rgba(255, 255, 255, 0.5);
-  pointer-events: none;
-}
-.touch-steer.active .steer-arrow {
-  color: #fff;
-}
+/* Look: the whole screen behind the controls (the HUD sits above this layer). */
 .touch-look {
-  left: 22%;
-  width: 56%;
+  position: absolute;
+  inset: 0;
+  pointer-events: auto;
 }
 
-/* --- Buttons -------------------------------------------------------------------- */
-.touch-btn {
+/* --- Shared button look ----------------------------------------------------------- */
+.touch-btn,
+.steer-half {
   pointer-events: auto;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
+  gap: 2px;
   padding: 0;
-  border: 2px solid rgba(255, 255, 255, 0.45);
-  border-radius: 50%;
-  background: rgba(11, 42, 85, 0.45);
+  border: 2px solid rgba(255, 255, 255, 0.5);
+  background: rgba(11, 42, 85, 0.5);
   color: #fff;
   font-family: inherit;
   font-weight: 600;
-  font-size: clamp(12px, 3.2vmin, 16px);
+  font-size: clamp(11px, 3vmin, 15px);
   line-height: 1;
   letter-spacing: 0.04em;
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
   -webkit-backdrop-filter: blur(4px);
   backdrop-filter: blur(4px);
+  transition:
+    background 0.08s,
+    transform 0.08s;
 }
-.touch-btn:active,
-.touch-btn.on {
-  background: rgba(255, 196, 64, 0.75);
+.touch-btn.on,
+.steer-half.on {
+  background: rgba(255, 196, 64, 0.8);
   border-color: #fff;
+  transform: scale(0.95);
 }
-.touch-btn svg {
-  width: 55%;
-  height: 55%;
+.touch-btn svg,
+.steer-half svg {
+  width: 50%;
+  height: 50%;
   fill: none;
   stroke: currentColor;
-  stroke-width: 2.2;
+  stroke-width: 2.6;
   stroke-linecap: round;
   stroke-linejoin: round;
+  pointer-events: none;
+}
+.touch-btn span {
+  pointer-events: none;
 }
 
-.touch-top {
+/* --- Steering pad (bottom-left) --------------------------------------------------- */
+.touch-steer {
   position: absolute;
-  bottom: calc(var(--safe-b) + var(--pad) + clamp(72px, 20vmin, 100px) + 14px);
-  right: calc(var(--safe-r) + var(--pad) + 12px);
+  left: calc(var(--safe-l) + var(--pad));
+  bottom: calc(var(--safe-b) + var(--pad));
   display: flex;
-  gap: 10px;
+  gap: var(--gap);
+  pointer-events: auto;
 }
-.touch-btn.small {
-  width: 44px;
-  height: 44px;
+.steer-half {
+  width: var(--steer);
+  height: var(--steer);
+  border-radius: 22%;
+}
+.steer-half svg {
+  width: 60%;
+  height: 60%;
 }
 
-/* Thumb arc in the bottom-right corner: jump biggest and closest to the thumb. */
-.touch-cluster {
-  --jump: clamp(72px, 20vmin, 100px);
-  --side: clamp(52px, 14vmin, 70px);
+/* --- Pedals (bottom-right): BRAKE then GAS, GAS on the outside under the thumb ---- */
+.touch-pedals {
   position: absolute;
   right: calc(var(--safe-r) + var(--pad));
   bottom: calc(var(--safe-b) + var(--pad));
-  width: calc(var(--jump) + var(--side) + 12px);
-  height: calc(var(--jump) + var(--side) + 12px);
+  display: flex;
+  align-items: flex-end;
+  gap: var(--gap);
 }
-.touch-cluster .touch-btn {
+.touch-btn.pedal {
+  width: var(--pedal);
+  border-radius: 18px;
+}
+.touch-btn.pedal svg {
+  width: 44%;
+  height: auto;
+}
+.touch-btn.gas {
+  height: var(--pedal-h);
+  background: rgba(30, 140, 70, 0.55);
+}
+.touch-btn.brake {
+  height: var(--pedal);
+  background: rgba(150, 30, 40, 0.55);
+}
+.touch-btn.gas.on {
+  background: rgba(90, 230, 120, 0.85);
+}
+.touch-btn.brake.on {
+  background: rgba(255, 90, 90, 0.85);
+}
+
+/* --- Actions (above the pedals, filling from the bottom-right) --------------------- */
+.touch-actions {
   position: absolute;
+  right: calc(var(--safe-r) + var(--pad));
+  bottom: calc(var(--safe-b) + var(--pad) + var(--pedal-h) + var(--gap) * 1.5);
+  width: calc(var(--act) * 3 + var(--gap) * 2);
+  display: flex;
+  flex-direction: row-reverse;
+  flex-wrap: wrap-reverse;
+  gap: var(--gap);
 }
-.touch-btn.jump {
-  right: 0;
-  bottom: 0;
-  width: var(--jump);
-  height: var(--jump);
-  font-size: clamp(14px, 3.8vmin, 18px);
+.touch-btn.act {
+  width: var(--act);
+  height: var(--act);
+  border-radius: 50%;
+  font-size: clamp(10px, 2.7vmin, 13px);
 }
-.touch-btn.sprint {
-  left: 0;
-  bottom: calc((var(--jump) - var(--side)) / 2);
-  width: var(--side);
-  height: var(--side);
+.touch-btn.act.day svg {
+  width: 52%;
+  height: 52%;
 }
-.touch-btn.mode {
-  top: 0;
-  right: calc((var(--jump) - var(--side)) / 2);
-  width: var(--side);
-  height: var(--side);
-}
-/* HORN: the cluster's top-left corner (clear of the power readout under the cluster's left). */
-.touch-btn.horn {
-  top: 0;
-  left: 0;
-  width: var(--side);
-  height: var(--side);
+
+/* Portrait: little room beside the level bar, so the actions stack in one column on the
+   right edge and the bottom HUD (hud.css) moves up above the pads. */
+@media (orientation: portrait) {
+  .touch-actions {
+    width: var(--act);
+  }
 }

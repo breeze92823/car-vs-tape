@@ -13,7 +13,7 @@ import { createFx } from './fx.js'
 // Car Shop is open, main.js calls render() before the main frame is drawn: up to two visible
 // cards per frame are rendered into the corner of the game's canvas and copied into the card's
 // own 2D canvas (the same trick the static thumbnails use), so there is no second WebGL context.
-export function createShopView({ renderer, envScene, driver, quality = 1 }) {
+export function createShopView({ renderer, envScene, driver, quality = 1, reuse }) {
   let built = null
   let pending = null
   let queue = []
@@ -52,8 +52,12 @@ export function createShopView({ renderer, envScene, driver, quality = 1 }) {
       const card = cards[i]
       const pic = card?.querySelector('.cs-pic')
       if (!pic) return
-      const parts = buildCar(def)
-      driver.seatPreview(parts)
+      // reuse(def): the car main.js already built (and seated the driver in) for its thumbnail.
+      let parts = reuse?.(def)
+      if (!parts) {
+        parts = buildCar(def)
+        driver.seatPreview(parts)
+      }
       const holder = new Group()
       holder.position.x = built.length * SPACING
       holder.add(parts.root)
@@ -226,27 +230,31 @@ export function createShopView({ renderer, envScene, driver, quality = 1 }) {
 
   // compile() only builds the shaders: each car's geometry and textures reach the GPU on its first
   // draw, which used to land on the first time the Car Shop opened (a few seconds of stutter). Draw
-  // every car once into a 2 px corner, one per tick, so that upload happens in the background.
+  // every car once into a 2 px corner (prewarmNow: all at once behind the loading screen;
+  // warmUploads: one per tick in the background) so that upload happens before the shop opens.
+  function drawTiny(b) {
+    try {
+      const hx = b.holder.position.x
+      cam.aspect = 16 / 10
+      cam.updateProjectionMatrix()
+      cam.position.set(hx + 4.2, 2.1, -5.6)
+      cam.lookAt(hx, 0.55, -0.4)
+      renderer.getViewport(savedViewport)
+      renderer.setRenderTarget(null)
+      renderer.setScissorTest(true)
+      renderer.setViewport(0, 0, 2, 2)
+      renderer.setScissor(0, 0, 2, 2)
+      renderer.render(scene, cam)
+      renderer.setScissorTest(false)
+      renderer.setViewport(savedViewport)
+    } catch {}
+  }
   function warmUploads() {
     let i = 0
     const step = () => {
       const b = built[i++]
       if (!b) return
-      try {
-        const hx = b.holder.position.x
-        cam.aspect = 16 / 10
-        cam.updateProjectionMatrix()
-        cam.position.set(hx + 4.2, 2.1, -5.6)
-        cam.lookAt(hx, 0.55, -0.4)
-        renderer.getViewport(savedViewport)
-        renderer.setRenderTarget(null)
-        renderer.setScissorTest(true)
-        renderer.setViewport(0, 0, 2, 2)
-        renderer.setScissor(0, 0, 2, 2)
-        renderer.render(scene, cam)
-        renderer.setScissorTest(false)
-        renderer.setViewport(savedViewport)
-      } catch {}
+      drawTiny(b)
       setTimeout(step, 200)
     }
     step()
@@ -272,6 +280,20 @@ export function createShopView({ renderer, envScene, driver, quality = 1 }) {
         }
         next()
       })
+    },
+    // During the loading screen (main.js): build, compile and upload every live car at once.
+    async prewarmNow() {
+      if (pending) return
+      pending = Promise.resolve()
+      try {
+        build()
+        while (queue.length) buildNext()
+        if (!built.length) return
+        await Promise.race([renderer.compileAsync(scene, cam), new Promise((r) => setTimeout(r, 8000))])
+        for (const b of built) drawTiny(b)
+      } catch {
+        // Worst case the shop builds what's missing when it opens.
+      }
     },
     // Every frame, before the main render.
     render(dt, elapsed) {
